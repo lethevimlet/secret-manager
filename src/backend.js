@@ -67,6 +67,36 @@ export async function request(pathname, { method = 'GET', body, admin = false, c
   return data;
 }
 
+// Unauthenticated request (pairing). `ca` = PEM file to trust; `insecure` only
+// for fetching the CA itself, whose fingerprint the user then confirms.
+export function publicRequest(server, pathname, { method = 'GET', body, ca, insecure = false, timeoutMs = 8000, raw = false } = {}) {
+  const url = new URL(pathname, server);
+  const lib = url.protocol === 'https:' ? https : http;
+  const payload = body ? JSON.stringify(body) : null;
+  const opts = { method, timeout: timeoutMs, headers: payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : {} };
+  if (url.protocol === 'https:') {
+    if (ca) opts.ca = fs.readFileSync(ca);
+    if (insecure) opts.rejectUnauthorized = false;
+  }
+  return new Promise((resolve, reject) => {
+    const req = lib.request(url, opts, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (d) => (text += d));
+      res.on('end', () => {
+        if (raw) return res.statusCode === 200 ? resolve(text) : reject(new Error(`HTTP ${res.statusCode} for ${url.pathname}`));
+        let data = {};
+        try { data = JSON.parse(text); } catch {}
+        if (res.statusCode < 200 || res.statusCode >= 300) reject(new Error(data.error || `HTTP ${res.statusCode}`));
+        else resolve(data);
+      });
+    });
+    req.on('timeout', () => req.destroy(Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' })));
+    req.on('error', (err) => reject(new Error(`${server} unreachable (${err.code || err.message})`)));
+    req.end(payload ?? undefined);
+  });
+}
+
 // ---- used by sm ----
 export async function getSecrets() {
   const cfg = loadConfig();

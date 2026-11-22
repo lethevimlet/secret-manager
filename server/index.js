@@ -5,6 +5,7 @@
 //   SM_SERVER_DATA   default <project>/.sm-server
 //   SM_MASTER_KEY    optional 64-hex master key (else a key file in the data dir)
 //   SM_TLS_CERT, SM_TLS_KEY   certificate for HTTPS
+//   SM_TLS_CA        CA certificate that signed it; served at /ca.pem for other machines
 //   SM_AUDIT_DAYS    keep activity this many days (default 30, 0 = no age limit)
 //   SM_AUDIT_MAX     keep at most this many activity entries (default 10000, 0 = no limit)
 //   SM_NO_AUTH=1     TESTING ONLY: manage secrets without a token (values still need one)
@@ -47,7 +48,7 @@ if (isMain) {
   const noAuth = process.env.SM_NO_AUTH === '1';
   const guiAuth = new GuiAuth(dir);
   if (!guiAuth.passwordSet) console.log('GUI: no password yet; set it on first visit (from another machine: smctl setup-code)');
-  const app = createApp({ store, tokens, audit: new AuditLog(path.join(dir, 'audit.log'), { days: Number(process.env.SM_AUDIT_DAYS ?? 30), max: Number(process.env.SM_AUDIT_MAX ?? 10000) }), noAuth, guiAuth });
+  const app = createApp({ store, tokens, audit: new AuditLog(path.join(dir, 'audit.log'), { days: Number(process.env.SM_AUDIT_DAYS ?? 30), max: Number(process.env.SM_AUDIT_MAX ?? 10000) }), noAuth, guiAuth, caPem: process.env.SM_TLS_CA ? fs.readFileSync(process.env.SM_TLS_CA, 'utf8') : null });
   if (noAuth) console.warn('WARNING: SM_NO_AUTH=1, anyone who can reach the server can add, replace and delete secrets');
 
   // Listener 1: plain HTTP on loopback, for sm/smctl on this machine.

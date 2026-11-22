@@ -14,6 +14,39 @@ The calling process (the agent) never has the values in its own environment.
 
 Node >= 20, Linux (interactive mode uses util-linux `script`). The server uses Express.
 
+## Install
+
+```bash
+git clone https://github.com/lethevimlet/secret-manager && cd secret-manager
+./installer.sh
+```
+
+The installer checks Node (20+), installs the commands (`sm`, `smctl`, `sm-ls`,
+`sm-add`, `sm-server`, `git-credential-sm`; to `/usr/local/bin` as root, else
+`~/.local/bin`), then asks:
+
+1. **Run the server on this machine?** If yes: optionally HTTPS on your network
+   (your own certificate, or a generated local CA + certificate), and a systemd
+   unit that **starts at boot** (system unit as root, user unit otherwise).
+   If no: the URL of an existing server and a **pairing code** (below).
+2. Install the agent skill for Claude Code and opencode (symlinks) and the
+   start-of-conversation announcement.
+3. Let git take the GitHub token from sm (`git-credential-sm`).
+
+Non-interactive: `./installer.sh --server --lan 192.168.1.10 --gen-tls --yes`, or
+`./installer.sh --client --server-url https://HOST:8737 --code XXXX-XXXX --ca-fingerprint …`
+(`--no-skill`, `--no-git`, `--no-service`, `--bin DIR`, `--port N`).
+
+### Using the server from another machine
+
+On the server: `smctl pair`. It prints a one-time code (10 minutes, single
+use), the CA fingerprint and the command to run on the other machine. There,
+the installer (or `smctl login --server https://HOST:8737 --code … `) downloads
+the server's CA from `/ca.pem`, checks the fingerprint (`--ca-fingerprint`, or
+asks you to compare), and exchanges the code for the **client** token. That
+machine can then use secrets (`sm -c`, `sm-ls`, `sm-add`) but not view,
+replace or delete them. Wrong codes are rate-limited; pairings show in Activity.
+
 ## Server + GUI
 
 `sm-server` keeps the secrets (AES-256-GCM per value) and serves a web GUI.

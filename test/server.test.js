@@ -297,3 +297,18 @@ test('rotate: server-generated values, charset/length, audit without values, smc
   assert.notEqual((await cli('smctl.js', ['rotate', 'NOPE_X'], { admin: true })).status, 0);
   await call('/secrets/ROT', { method: 'DELETE' });
 });
+
+test('pairing: admin creates a single-use code, another machine claims the client token', async () => {
+  assert.equal((await fetch(base + '/v1/pair', { method: 'POST', headers: { Authorization: `Bearer ${tokens.client}` } })).status, 403);
+  const p = await call('/pair', { method: 'POST' }).then((r) => r.json());
+  assert.match(p.code, /^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
+  const claim = (code) => fetch(base + '/v1/pair/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, device: 'laptop' }) });
+  assert.equal((await claim('WRONG-CODE')).status, 403);
+  const ok = await claim(p.code.toLowerCase());
+  assert.equal(ok.status, 200);
+  assert.equal((await ok.json()).token, tokens.client); // never the admin token
+  assert.equal((await claim(p.code)).status, 403); // single use
+  const { entries } = await call('/audit').then((r) => r.json());
+  assert.ok(entries.some((e) => e.type === 'pair.claimed' && e.device === 'laptop'));
+  assert.equal((await fetch(base + '/ca.pem')).status, 404); // no CA configured in this test app
+});

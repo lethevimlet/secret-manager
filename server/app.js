@@ -67,7 +67,7 @@ export class AuditLog {
   }
 }
 
-export function createApp({ store, tokens, audit, noAuth = false, guiAuth = null }) {
+export function createApp({ store, tokens, audit, noAuth = false, guiAuth = null, caPem = null }) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', false);
@@ -82,6 +82,9 @@ export function createApp({ store, tokens, audit, noAuth = false, guiAuth = null
   });
 
   app.get('/health', (_req, res) => res.json({ ok: true }));
+  // Public CA certificate (not a secret) so other machines can trust the HTTPS
+  // listener; clients show its fingerprint for the user to compare.
+  app.get('/ca.pem', (_req, res) => (caPem ? res.type('application/x-pem-file').send(caPem) : res.status(404).json({ error: 'no CA configured (SM_TLS_CA)' })));
   app.use(express.static(PUBLIC_DIR, { index: 'index.html', maxAge: 0 }));
 
   const api = express.Router();
@@ -145,6 +148,28 @@ export function createApp({ store, tokens, audit, noAuth = false, guiAuth = null
     });
   }
 
+  // ---- Pairing another machine: one-time code -> client token ----
+  const pairCodes = new Map(); // code -> { expires, by }
+  const pairFails = new Map(); // ip -> { count, until }
+  const PAIR_TTL = 10 * 60_000;
+  api.post('/pair/claim', (req, res) => {
+    const f = pairFails.get(ip(req));
+    if (f && f.until > Date.now()) return fail(res, 429, `too many wrong codes, wait ${Math.ceil((f.until - Date.now()) / 1000)} s`);
+    const code = String(req.body?.code || '').trim().toUpperCase();
+    const entry = pairCodes.get(code);
+    if (!entry || entry.expires < Date.now()) {
+      const n = (f?.count || 0) + 1;
+      pairFails.set(ip(req), { count: n, until: n >= 5 ? Date.now() + Math.min(2 ** (n - 5), 900) * 1000 : 0 });
+      audit.add({ type: 'pair.failed', ip: ip(req) });
+      return fail(res, 403, 'wrong or expired pairing code (create one with smctl pair on the server)');
+    }
+    pairCodes.delete(code); // single use
+    pairFails.delete(ip(req));
+    const device = String(req.body?.device || '').slice(0, 80);
+    audit.add({ type: 'pair.claimed', ip: ip(req), device });
+    res.json({ token: tokens.client, scope: 'client' });
+  });
+
   // Resolve the caller's scope: bearer token, or a GUI session cookie.
   api.use((req, res, next) => {
     const m = /^Bearer (.+)$/.exec(req.get('authorization') || '');
@@ -167,6 +192,17 @@ export function createApp({ store, tokens, audit, noAuth = false, guiAuth = null
     scope === 'client' || req.scope === 'admin' ? next() : res.status(403).json({ error: `${scope} token required` });
 
   api.get('/whoami', (req, res) => res.json({ scope: req.scope, anonymous: Boolean(req.anonymous), session: Boolean(req.session) }));
+
+  // Admin: create a pairing code for another machine.
+  api.post('/pair', need('admin'), (req, res) => {
+    if (req.anonymous) return fail(res, 401, 'pairing needs the admin token or a signed-in GUI');
+    for (const [c, e] of pairCodes) if (e.expires < Date.now()) pairCodes.delete(c);
+    const code = crypto.randomBytes(6).toString('base64url').toUpperCase().replace(/[^A-Z0-9]/g, '').padEnd(8, 'X').slice(0, 8);
+    const pretty = `${code.slice(0, 4)}-${code.slice(4)}`;
+    pairCodes.set(pretty, { expires: Date.now() + PAIR_TTL });
+    audit.add({ type: 'pair.created', by: req.session ? 'gui' : 'admin token', ip: ip(req) });
+    res.json({ code: pretty, expiresInSeconds: PAIR_TTL / 1000, caFingerprint: caPem ? new crypto.X509Certificate(caPem).fingerprint256 : null });
+  });
 
   // Admin: one-time setup code / change or reset the GUI password.
   if (guiAuth) {

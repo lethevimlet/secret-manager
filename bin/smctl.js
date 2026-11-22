@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // smctl: manage secrets (on the sm-server once logged in, else the local file store).
 //   smctl login [--server URL] [--data DIR] [--token T --admin-token A] [--ca PEM] [--gui-url URL]
+//   smctl login --server https://HOST:8737 --code XXXX-XXXX [--ca PEM | --ca-fingerprint SHA256]   (another machine)
+//   smctl pair                one-time code for another machine (prints the command to run there)
 //   smctl status
 //   smctl gui [URL] [--no-open]   print (and try to open) the GUI URL, signed in
 //   smctl setup-code          one-time code to set the first GUI password from another machine
@@ -14,6 +16,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
+import os from 'node:os';
+import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { NAME_RE } from '../src/store.js';
 import { placeholder } from '../src/placeholders.js';
@@ -55,6 +60,30 @@ async function readValue(name) {
   return value;
 }
 
+// Download the server's CA certificate (not secret), check its fingerprint
+// against --ca-fingerprint or ask the user, and save it next to the config.
+async function fetchCa(server, wantFp) {
+  const pem = await backend.publicRequest(server, '/ca.pem', { insecure: true, raw: true }).catch((err) => {
+    throw new Error(`could not get the server's CA certificate (${err.message}); pass --ca /path/to/ca.crt`);
+  });
+  const fp = new crypto.X509Certificate(pem).fingerprint256;
+  const norm = (x) => String(x).replace(/[^0-9a-f]/gi, '').toUpperCase();
+  if (wantFp) {
+    if (norm(wantFp) !== norm(fp)) throw new Error(`CA fingerprint mismatch: server sent ${fp}`);
+  } else {
+    process.stderr.write(`Server CA fingerprint:\n  ${fp}\nCompare it with the one printed by \`smctl pair\` on the server.\n`);
+    if (!process.stdin.isTTY) throw new Error('not confirmed: pass --ca-fingerprint (non-interactive)');
+    const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+    const ok = /^y(es)?$/i.test((await rl.question('Do they match? [y/N] ')).trim());
+    rl.close();
+    if (!ok) throw new Error('CA not trusted, nothing changed');
+  }
+  const file = path.join(path.dirname(backend.configPath()), 'ca.pem');
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(file, pem, { mode: 0o644 });
+  return file;
+}
+
 const fmtTime = (iso) => (iso ? iso.replace('T', ' ').slice(0, 19) : '-');
 
 async function main() {
@@ -63,8 +92,17 @@ async function main() {
       const server = flag('--server') || DEFAULT_SERVER;
       let token = flag('--token');
       let adminToken = flag('--admin-token');
-      const ca = flag('--ca');
+      let ca = flag('--ca');
       const guiUrl = flag('--gui-url');
+      const code = flag('--code');
+      const wantFp = flag('--ca-fingerprint');
+      if (code) {
+        // Another machine: trust the server's CA (fingerprint-checked), then
+        // exchange the one-time code for the client token.
+        if (server.startsWith('https:') && !ca) ca = await fetchCa(server, wantFp);
+        const r = await backend.publicRequest(server, '/v1/pair/claim', { method: 'POST', body: { code, device: os.hostname() }, ca });
+        token = r.token;
+      }
       if (!token && !adminToken) {
         // Same machine: read the tokens the server generated.
         const dir = flag('--data') || process.env.SM_SERVER_DATA || path.join(ROOT, '.sm-server');
@@ -76,6 +114,16 @@ async function main() {
       const who = await backend.request('/whoami', { cfg, admin: Boolean(adminToken) });
       backend.saveConfig(cfg);
       process.stderr.write(`smctl: logged in to ${server} (${who.scope}); config ${backend.configPath()}\n`);
+      return 0;
+    }
+    case 'pair': {
+      const r = await backend.request('/pair', { method: 'POST', admin: true });
+      const cfg = backend.loadConfig();
+      const lan = cfg.guiUrl || cfg.server;
+      process.stdout.write(`Pairing code: ${r.code}   (single use, valid ${r.expiresInSeconds / 60} minutes)\n`);
+      if (r.caFingerprint) process.stdout.write(`CA fingerprint: ${r.caFingerprint}\n`);
+      process.stdout.write(`\nOn the other machine run:\n  ./installer.sh --client --server-url ${lan} --code ${r.code}\n` +
+        `or, if sm is already installed there:\n  smctl login --server ${lan} --code ${r.code}${r.caFingerprint ? ` --ca-fingerprint ${r.caFingerprint}` : ''}\n`);
       return 0;
     }
     case 'logout':
@@ -169,7 +217,7 @@ async function main() {
       for (const e of await backend.readAudit(Number(rest[0] || 20))) process.stdout.write(JSON.stringify(e) + '\n');
       return 0;
     default:
-      return fail('usage: smctl {login|logout|status|gui|setup-code|passwd|set NAME|rotate NAME|list [-l]|rm NAME|env|audit [N]}');
+      return fail('usage: smctl {login|logout|status|gui|pair|setup-code|passwd|set NAME|rotate NAME|list [-l]|rm NAME|env|audit [N]}');
   }
 }
 

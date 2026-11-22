@@ -55,7 +55,7 @@ sm -c 'aws iam create-access-key --user-name ci --output json' \
   3), don't create a variant like `NAME_2` or `NAME_<date>`: use the existing
   one, or ask the user whether it should be replaced (they do that in the GUI).
 - The value is **never** an argument (`sm-add NAME value` is refused): use
-  `--generate [LENGTH]` (`--charset alnum|hex|base64url|symbols`) or a pipe.
+  `--generate [LENGTH]` (default 12; `--charset alnum|hex|base64url|symbols`) or a pipe.
 - Pipe only the value itself (extract it with `jq`, `cut`, … in the same
   pipeline), never a whole JSON or log output.
 - `--if-missing` makes an existing name a no-op (exit 0) for re-runnable setup.

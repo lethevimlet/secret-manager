@@ -205,7 +205,7 @@ export function createApp({ store, tokens, audit, noAuth = false, guiAuth = null
     const { note, category, generate } = req.body || {};
     // `generate: { length, charset }` = a random value made here, so it never
     // travels over the network or through the browser (rotation).
-    const value = generate ? generateValue(generate.length ?? 32, generate.charset ?? 'alnum') : req.body?.value;
+    const value = generate ? generateValue(generate.length ?? 12, generate.charset ?? 'alnum') : req.body?.value;
     const created = store.set(name, value, note, category);
     const type = created ? 'secret.create' : generate ? 'secret.rotate' : 'secret.update';
     audit.add({ type, name, ...(generate && { generated: { length: value.length, charset: generate.charset ?? 'alnum' } }), by: req.anonymous ? 'anonymous' : 'admin' });

@@ -2,7 +2,7 @@
 // sm-add: create a NEW secret without the value ever appearing in a
 // terminal, a command line or an agent's context. Never replaces an existing one.
 //
-//   sm-add NAME --generate [LENGTH] [--charset alnum|hex|base64url|symbols]
+//   sm-add NAME --generate [LENGTH, default 12] [--charset alnum|hex|base64url|symbols]
 //   some-command-that-prints-a-token | sm-add NAME
 //   sm-add NAME            (interactive terminal: asks for the value, hidden)
 //   options: --category NAME  --note TEXT  --if-missing (exit 0 if it exists)
@@ -45,7 +45,7 @@ if (g !== -1) {
     generate = Number(n);
     args.splice(g, 2);
   } else {
-    generate = 32;
+    generate = 12;
     args.splice(g, 1);
   }
 }

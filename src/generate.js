@@ -10,7 +10,7 @@ export const CHARSETS = {
 export const MIN_LENGTH = 8;
 export const MAX_LENGTH = 4096;
 
-export function generateValue(length = 32, charset = 'alnum') {
+export function generateValue(length = 12, charset = 'alnum') {
   const chars = CHARSETS[charset];
   if (!chars) throw Object.assign(new Error(`unknown charset ${charset} (${Object.keys(CHARSETS).join(', ')})`), { status: 400 });
   const len = Number(length);

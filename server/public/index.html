@@ -81,7 +81,7 @@
           <label class="check gen-toggle"><input id="add-generate" type="checkbox"> Generate a random value (made on the server, shown after saving)</label>
           <div id="add-gen" hidden>
           <div class="gen-opts">
-            <label class="inline">Length <input id="add-length" type="number" min="8" max="4096" value="32"></label>
+            <label class="inline">Length <input id="add-length" type="number" min="8" max="4096" value="12"></label>
             <label class="inline">Characters
               <select id="add-charset">
                 <option value="alnum">Letters + digits</option>
@@ -239,7 +239,7 @@
       <p class="muted">Replaces the value with a new random one, generated on the server. Agents get the new value from their next <code>sm</code> command.</p>
       <p class="warn rotate-warn">Anything that still uses the old value (a database user, an external service, a deployed app) must be updated to the new one, or it stops working. The new value is shown right after rotating so you can copy it.</p>
       <div class="gen-opts">
-            <label class="inline">Length <input id="rotate-length" type="number" min="8" max="4096" value="32"></label>
+            <label class="inline">Length <input id="rotate-length" type="number" min="8" max="4096" value="12"></label>
             <label class="inline">Characters
               <select id="rotate-charset">
                 <option value="alnum">Letters + digits</option>

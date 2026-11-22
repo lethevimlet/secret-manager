@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>sm · Secrets</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23256f5c'/%3E%3Cpath d='M11 14v-3a5 5 0 0 1 10 0v3' fill='none' stroke='white' stroke-width='2.5'/%3E%3Crect x='8' y='14' width='16' height='11' rx='2' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <!-- Sign in -->
+  <main id="login" class="login" hidden>
+    <form id="login-form" class="card login-card">
+      <div class="brand"><span class="logo" aria-hidden="true"></span><span>sm</span></div>
+      <h1>Secret manager</h1>
+      <p class="muted">Paste the admin token. Run <code>smctl gui</code> to open this page signed in.</p>
+      <label for="token">Admin token</label>
+      <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="sma_…" required>
+      <p id="login-error" class="error" role="alert" hidden></p>
+      <button class="primary" type="submit">Sign in</button>
+    </form>
+  </main>
+
+  <!-- App -->
+  <div id="app" hidden>
+    <header class="topbar">
+      <div class="brand"><span class="logo" aria-hidden="true"></span><span>sm</span></div>
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-tab="secrets" aria-selected="true">Secrets</button>
+        <button role="tab" data-tab="activity" aria-selected="false">Activity</button>
+      </nav>
+      <div class="topbar-right">
+        <span id="status" class="status"><span class="dot"></span><span>connected</span></span>
+        <span id="noauth" class="badge delete" title="Server started with SM_NO_AUTH=1: anyone who can reach it can manage secrets" hidden>sign-in disabled (testing)</span>
+        <button id="logout" class="ghost">Sign out</button>
+      </div>
+    </header>
+
+    <section id="tab-secrets" class="page">
+      <div class="page-head">
+        <div>
+          <h2>Secrets</h2>
+          <p class="muted">Values are write-only: they can be replaced, never shown. Agents use them as <code>$NAME</code> or <code>{{secret:NAME}}</code> in <code>sm</code>.</p>
+        </div>
+        <button id="add-toggle" class="primary">Add secret</button>
+      </div>
+
+      <form id="add-form" class="card add-form" hidden>
+        <div class="field">
+          <label for="add-name">Name</label>
+          <input id="add-name" required pattern="[A-Za-z_][A-Za-z0-9_]*" maxlength="128" placeholder="API_KEY" autocomplete="off" spellcheck="false">
+          <small class="muted">Letters, digits and _. This is the shell variable name.</small>
+        </div>
+        <div class="field">
+          <label for="add-value">Value</label>
+          <div class="reveal">
+            <input id="add-value" type="password" required autocomplete="off" spellcheck="false">
+            <button type="button" class="ghost small" data-reveal="add-value">Show</button>
+          </div>
+          <small id="add-warn" class="warn" hidden>Short values (under 8 characters) also redact unrelated output that contains them.</small>
+        </div>
+        <div class="field">
+          <label for="add-category">Category <span class="muted">(optional)</span></label>
+          <input id="add-category" list="category-list" maxlength="40" placeholder="GitHub, Cloud, Databases…" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="add-note">Note <span class="muted">(optional)</span></label>
+          <input id="add-note" maxlength="200" placeholder="What it's for, where it came from">
+        </div>
+        <p id="add-error" class="error" role="alert" hidden></p>
+        <div class="actions">
+          <button type="button" id="add-cancel" class="ghost">Cancel</button>
+          <button class="primary" type="submit">Save</button>
+        </div>
+      </form>
+
+      <div class="card table-card">
+        <div class="table-tools">
+          <div class="search">
+            <input id="filter" type="search" placeholder="Search name, category or note" aria-label="Search secrets" autocomplete="off">
+            <kbd title="Press / to search">/</kbd>
+          </div>
+          <span id="count" class="muted"></span>
+        </div>
+        <div id="categories" class="chips" role="tablist" aria-label="Categories"></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Note</th><th>Updated</th><th>Last used</th><th class="num">Uses</th><th></th></tr></thead>
+            <tbody id="secrets-body"></tbody>
+          </table>
+        </div>
+        <div id="secrets-nomatch" class="empty" hidden>
+          <p class="muted">Nothing matches. <button id="clear-search" class="link">Clear the search</button></p>
+        </div>
+        <div id="secrets-empty" class="empty" hidden>
+          <p><strong>No secrets yet.</strong></p>
+          <p class="muted">Add one with the button above, or from a terminal: <code>printf %s 'value' | smctl set NAME</code></p>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-activity" class="page" hidden>
+      <div class="page-head">
+        <div>
+          <h2>Activity</h2>
+          <p class="muted">Commands run through <code>sm</code> (as written, with placeholders) and changes to secrets. Never values.</p>
+        </div>
+        <div class="row">
+          <select id="activity-filter" aria-label="Filter activity">
+            <option value="">Everything</option>
+            <option value="command">Commands</option>
+            <option value="secret">Changes</option>
+            <option value="resolve">Value fetches</option>
+          </select>
+          <label class="check"><input id="auto" type="checkbox" checked> Live</label>
+        </div>
+      </div>
+      <div class="card table-card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Time</th><th>Event</th><th>Details</th><th class="num">Blocked</th><th class="num">Exit</th></tr></thead>
+            <tbody id="activity-body"></tbody>
+          </table>
+        </div>
+        <div id="activity-empty" class="empty" hidden><p class="muted">Nothing yet.</p></div>
+        <div class="table-foot">
+          <span id="activity-info" class="muted"></span>
+          <button id="activity-more" class="ghost small" hidden>Show more</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <dialog id="replace-dialog">
+    <form method="dialog" id="replace-form">
+      <h3>Replace <code id="replace-name"></code></h3>
+      <p class="muted">The current value is discarded. Running shells pick up the new one on their next command.</p>
+      <label for="replace-value">New value</label>
+      <div class="reveal">
+        <input id="replace-value" type="password" required autocomplete="off" spellcheck="false">
+        <button type="button" class="ghost small" data-reveal="replace-value">Show</button>
+      </div>
+      <p id="replace-error" class="error" role="alert" hidden></p>
+      <div class="actions">
+        <button type="button" class="ghost" data-close>Cancel</button>
+        <button class="primary" type="submit" value="ok">Replace</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="edit-dialog">
+    <form method="dialog" id="edit-form">
+      <h3>Edit <code id="edit-name"></code></h3>
+      <p class="muted">Category and note only. The value is not changed.</p>
+      <label for="edit-category">Category</label>
+      <input id="edit-category" list="category-list" maxlength="40" placeholder="Leave empty for Uncategorized" autocomplete="off">
+      <label for="edit-note">Note</label>
+      <input id="edit-note" maxlength="200">
+      <p id="edit-error" class="error" role="alert" hidden></p>
+      <div class="actions">
+        <button type="button" class="ghost" data-close>Cancel</button>
+        <button class="primary" type="submit" value="ok">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <datalist id="category-list"></datalist>
+
+  <dialog id="delete-dialog">
+    <form method="dialog" id="delete-form">
+      <h3>Delete <code id="delete-name"></code>?</h3>
+      <p class="muted">Commands that use it will stop with "unknown secret". This can't be undone.</p>
+      <div class="actions">
+        <button type="button" class="ghost" data-close>Cancel</button>
+        <button class="danger" type="submit" value="ok">Delete</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

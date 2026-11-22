@@ -234,10 +234,19 @@
   </dialog>
 
   <dialog id="rotate-dialog">
+    <div id="rotate-result" hidden>
+      <h3><code id="rotate-result-name"></code> rotated</h3>
+      <p class="muted">New value (<span id="rotate-result-info"></span>). Copy it now to update whatever uses this secret; you can view it again later with Show.</p>
+      <code id="rotate-value" class="secret-value"></code>
+      <div class="actions">
+        <button type="button" class="primary" id="rotate-copy">Copy</button>
+        <button type="button" class="ghost" data-close>Done</button>
+      </div>
+    </div>
     <form method="dialog" id="rotate-form">
       <h3>Rotate <code id="rotate-name"></code></h3>
       <p class="muted">Replaces the value with a new random one, generated on the server. Agents get the new value from their next <code>sm</code> command.</p>
-      <p class="warn rotate-warn">Anything that still uses the old value (a database user, an external service, a deployed app) must be updated to the new one, or it stops working. The new value is shown right after rotating so you can copy it.</p>
+      <p class="warn rotate-warn">Anything that still uses the old value (a database user, an external service, a deployed app) must be updated to the new one, or it stops working. The new value is shown right after rotating, with a Copy button.</p>
       <div class="gen-opts">
             <label class="inline">Length <input id="rotate-length" type="number" min="8" max="4096" value="12"></label>
             <label class="inline">Characters

@@ -281,6 +281,17 @@ async function showValue(name) {
   }
 }
 
+async function copyText(value, selectEl) {
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    getSelection().selectAllChildren(selectEl);
+    toast('Copy blocked by the browser: the value is selected, press Ctrl+C');
+    return false;
+  }
+}
+
 function revealRow(name) {
   const { value } = revealed.get(name);
   const code = el('code', { class: 'secret-value' }, value);
@@ -289,17 +300,7 @@ function revealRow(name) {
       el('div', { class: 'reveal-box' },
         code,
         el('div', { class: 'reveal-actions' },
-          el('button', {
-            class: 'small', onclick: async () => {
-              try {
-                await navigator.clipboard.writeText(value);
-                toast(`${name} copied`);
-              } catch {
-                getSelection().selectAllChildren(code);
-                toast('Copy blocked by the browser: the value is selected, press Ctrl+C');
-              }
-            },
-          }, 'Copy'),
+          el('button', { class: 'small', onclick: async () => (await copyText(value, code)) && toast(`${name} copied`) }, 'Copy'),
           el('button', { class: 'small ghost', onclick: () => hideValue(name) }, 'Hide'),
           el('span', { class: 'muted' }, 'Hides after 30 s'),
         ),
@@ -451,19 +452,38 @@ function openRotate(name) {
   rotateTarget = name;
   $('#rotate-name').textContent = name;
   showError('#rotate-error');
+  $('#rotate-form').hidden = false;
+  $('#rotate-result').hidden = true;
+  $('#rotate-value').textContent = '';
   rotateDialog.showModal();
   $('#rotate-length').focus();
 }
+$('#rotate-copy').addEventListener('click', async () => {
+  if (await copyText($('#rotate-value').textContent, $('#rotate-value'))) {
+    $('#rotate-copy').textContent = 'Copied ✓';
+    toast(`${rotateTarget} copied`);
+  }
+});
+// Never leave the value in the page after the dialog closes.
+rotateDialog.addEventListener('close', () => ($('#rotate-value').textContent = ''));
+
 $('#rotate-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
     const r = await api(`/secrets/${encodeURIComponent(rotateTarget)}`, {
       method: 'PUT', body: { generate: { length: Number($('#rotate-length').value), charset: $('#rotate-charset').value } },
     });
-    rotateDialog.close();
-    toast(`${rotateTarget} rotated (${r.length} chars)`);
-    await loadSecrets();
-    await revealFresh(rotateTarget);
+    // Switch the dialog to the new value with a Copy button (fetched like Show, so it's logged).
+    const { value } = await api(`/secrets/${encodeURIComponent(rotateTarget)}/reveal`, { method: 'POST', probe: true });
+    if (revealed.has(rotateTarget)) hideValue(rotateTarget); // an older value on screen is stale now
+    $('#rotate-result-name').textContent = rotateTarget;
+    $('#rotate-result-info').textContent = `${r.length} random characters`;
+    $('#rotate-value').textContent = value;
+    $('#rotate-form').hidden = true;
+    $('#rotate-result').hidden = false;
+    $('#rotate-copy').textContent = 'Copy';
+    $('#rotate-copy').focus();
+    loadSecrets();
   } catch (err) {
     showError('#rotate-error', err.message);
   }

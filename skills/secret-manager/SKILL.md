@@ -84,6 +84,30 @@ quoting (`sm -c "curl -H 'X-Api-Key: {{secret:API_KEY}}' …"`).
   commands have the secrets too and you don't need `sm -c`.
 - Scripts: `sm ./deploy.sh args` or `sm -c './deploy.sh args'`.
 
+## GitHub: git and gh
+
+The GitHub token is the `GITHUB_TOKEN` secret. It is **not** in your
+environment, and git remotes contain no token. Git gets it from a credential
+helper that only answers inside sm, so:
+
+```bash
+sm -c 'git push'                 # also pull/fetch/clone of private repos
+sm -c 'git push -u origin main'
+sm -c 'gh pr create --fill'      # every gh command
+sm -c 'gh release view v1'
+```
+
+A plain `git push` fails with "credentials are only available inside sm":
+just rerun it with `sm -c '…'`. Never put a token into a remote URL
+(`https://<token>@github.com/…`), `.git/config`, `~/.bashrc` or a script.
+
+## Never run an agent inside sm
+
+Don't start `claude`, `opencode` or any other agent from inside an `sm` shell
+or `sm -c`: the agent would inherit every secret and send the output of its
+commands to the model unblocked. `sm` removes the secrets when it sees these
+commands, but you should simply run one command at a time with `sm -c`.
+
 ## What you will see
 
 - Any secret value in output is replaced by `[BLOCKED:NAME]`. That is

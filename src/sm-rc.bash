@@ -19,3 +19,6 @@ if [ -n "$__sm_tag" ]; then
   fi
   __sm_prompt
 fi
+
+# Agents started from this shell get no secrets.
+. "${BASH_SOURCE[0]%/*}/sm-agents.bash"

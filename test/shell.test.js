@@ -93,3 +93,28 @@ test('unknown placeholder fails before running anything', () => {
   assert.match(r.stderr, /unknown secret: NOPE/);
   assert.ok(!fs.existsSync('/tmp/sm-should-not-exist'));
 });
+
+test('agent guard: agents started inside sm get no secrets', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sm-agent-'));
+  fs.writeFileSync(path.join(dir, 'opencode'), '#!/bin/bash\necho "k=${API_KEY:-none} w=${WEIRD:-none} a=${SM_ACTIVE:-none} t=${TOK:-none}"\n', { mode: 0o755 });
+  const r = sm(['-c', 'echo "shell=${#API_KEY}"; opencode; echo {{secret:API_KEY}} >/dev/null; opencode'], { PATH: `${dir}:${process.env.PATH}`, TOK: 'Bearer {{secret:API_KEY}}' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, 'shell=20\nk=none w=none a=none t=none\nk=none w=none a=none t=none\n');
+  assert.match(r.stderr, /starting opencode without secrets/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('git-credential-sm: answers only with the token in the environment of an sm shell', () => {
+  const helper = path.join(ROOT, 'bin/git-credential-sm.js');
+  const ask = (envExtra) => spawnSync('node', [helper, 'get'], { input: 'protocol=https\nhost=github.com\n\n', encoding: 'utf8', env: { PATH: process.env.PATH, ...envExtra } });
+  const outside = ask({});
+  assert.equal(outside.stdout, 'quit=1\n');
+  assert.match(outside.stderr, /only available inside sm/);
+  assert.equal(ask({ SM_ACTIVE: '1' }).stdout, 'quit=1\n'); // faking SM_ACTIVE gets nothing
+  assert.equal(ask({ SM_ACTIVE: '1', GITHUB_TOKEN: 'ghp_example_value_123' }).stdout, 'username=x-access-token\npassword=ghp_example_value_123\n');
+  const other = spawnSync('node', [helper, 'get'], { input: 'protocol=https\nhost=gitlab.com\n\n', encoding: 'utf8', env: { PATH: process.env.PATH, SM_ACTIVE: '1', GITHUB_TOKEN: 'x' } });
+  assert.equal(other.stdout, '');
+  // Through sm the password is blocked if anyone prints it.
+  const viaSm = sm(['-c', `printf 'protocol=https\\nhost=github.com\\n\\n' | GITHUB_TOKEN="$API_KEY" node ${helper} get`]);
+  assert.equal(viaSm.stdout, 'username=x-access-token\npassword=[BLOCKED:API_KEY]\n');
+});

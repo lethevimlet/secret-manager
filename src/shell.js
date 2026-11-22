@@ -17,6 +17,7 @@ import { Redactor } from './redactor.js';
 
 const SELF = fs.realpathSync(fileURLToPath(new URL('../bin/sm.js', import.meta.url)));
 const RCFILE = fileURLToPath(new URL('./sm-rc.bash', import.meta.url));
+const AGENTS_FILE = fileURLToPath(new URL('./sm-agents.bash', import.meta.url));
 
 function realShell() {
   const sh = process.env.SM_REAL_SHELL || '/bin/bash';
@@ -85,6 +86,16 @@ export async function runShell(args) {
   });
 
   env.SM_ACTIVE = '1'; // lets scripts and prompts detect they run inside sm
+  // Every variable that now holds a secret value, so agents started inside sm
+  // can be given an environment without them (sm-agents.bash).
+  const valueVars = new Set(Object.keys(env).filter((k) => k.startsWith('__SM_') && k !== '__SM_SECRET_VARS'));
+  for (const [k, v] of Object.entries(env)) {
+    if (k in secrets && v === secrets[k]) valueVars.add(k);
+    if (process.env[k] !== undefined && process.env[k] !== v && findNames(process.env[k]).length) valueVars.add(k);
+  }
+  env.__SM_SECRET_VARS = [...valueVars].join(' ');
+  if (process.env.BASH_ENV && process.env.BASH_ENV !== AGENTS_FILE) env.__SM_USER_BASH_ENV = process.env.BASH_ENV;
+  env.BASH_ENV = AGENTS_FILE; // non-interactive bash (sm -c, scripts) loads the agent guard too
   const redactor = new Redactor(secrets);
   const interactive = !hasC && operandIndex === -1 && process.stdin.isTTY && process.stdout.isTTY;
 

@@ -92,6 +92,32 @@ red `sm ` tag (`SM_PROMPT='[sm] '` to change it, `SM_PROMPT=` to turn it off).
 `sm` accepts bash's arguments: `-c CMD`, `-lc`, `-o pipefail`, `--norc`,
 `script.sh args`, commands on stdin, interactive.
 
+## GitHub: git-credential-sm
+
+Store the token once (`printf %s "$TOKEN" | sm-add GITHUB_TOKEN`), remove it from
+remote URLs and shell profiles, and make git ask sm:
+
+```bash
+git config --global credential.https://github.com.helper ''
+git config --global --add credential.https://github.com.helper '!node /path/to/bin/git-credential-sm.js'
+```
+
+The helper answers only when `GITHUB_TOKEN` is in its environment, i.e. inside
+sm: `sm -c 'git push'`, `sm -c 'gh …'` (gh reads `GITHUB_TOKEN` itself). A plain
+`git push` stops with a hint; `git credential fill` outside sm returns nothing,
+and inside sm its output is `[BLOCKED]`. Systemd jobs run their command through
+sm (`ExecStart=node …/bin/sm.js /path/script.sh`).
+
+## Agents are never started inside sm
+
+Inside `sm` every secret is a real environment variable. An agent started there
+would inherit them and send its commands' output to the model through its own
+connection, which sm can't block (only your terminal shows `[BLOCKED]`). So in
+sm shells `claude`, `opencode`, `codex`, `aider`, `gemini` and `cursor-agent`
+are wrappers that start the agent with every secret variable removed
+(`src/sm-agents.bash`, loaded via the rc file and `BASH_ENV`). Calling an agent
+by its full path bypasses this: don't.
+
 ## sm-ls and sm-add
 
 ```bash

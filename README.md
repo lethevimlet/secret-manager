@@ -100,6 +100,15 @@ ln -s "$PWD/skills/secret-manager" ~/.config/opencode/skills/secret-manager    #
 
 (opencode also reads `~/.claude/skills`; with both links it lists the skill once.)
 
+For the announcement at the start of *every* conversation (not only when the
+skill loads), append `skills/global-instructions.md` to the global instruction
+files, which both agents always load:
+
+```bash
+cat skills/global-instructions.md >> ~/.claude/CLAUDE.md             # Claude Code
+cat skills/global-instructions.md >> ~/.config/opencode/AGENTS.md    # opencode
+```
+
 Tested: asked to call an API "with our weather API key" (no mention of sm),
 Claude Code and opencode both ran `sm -c 'curl -H "X-Api-Key: $WEATHER_API_KEY" …'`
 and got the answer; the value never appeared in their output. Asked to

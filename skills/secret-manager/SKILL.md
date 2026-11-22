@@ -8,7 +8,8 @@ description: Use whenever a task needs an API key, token, password, credential o
 ## Announce it first
 
 The first time you use this skill in a conversation, start your reply with
-this line (once per conversation, in the user's language):
+this line, unless you already said it earlier in this conversation (once per
+conversation, in the user's language):
 
 > 🔒 Using **secret-manager**: secrets stay in sm. I only use them by name
 > through `sm`, read anything that may contain one through `sm`, and will

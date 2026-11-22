@@ -86,6 +86,7 @@ async function signIn(candidate) {
 }
 
 function signOut(message) {
+  hideAllValues();
   token = null;
   try { sessionStorage.removeItem(KEY); } catch {}
   clearInterval(timer);
@@ -109,6 +110,7 @@ $('#logout').addEventListener('click', () => signOut());
 
 // ---------- tabs ----------
 function switchTab(name) {
+  if (name !== 'secrets') hideAllValues();
   for (const b of document.querySelectorAll('[data-tab]')) b.setAttribute('aria-selected', String(b.dataset.tab === name));
   $('#tab-secrets').hidden = name !== 'secrets';
   $('#tab-activity').hidden = name !== 'activity';
@@ -180,6 +182,91 @@ function renderChips(searched) {
   );
 }
 
+// ---------- viewing values ----------
+const REVEAL_MS = 30000;
+const revealed = new Map(); // name -> { value, timer }
+
+function hideValue(name) {
+  const r = revealed.get(name);
+  if (!r) return;
+  clearTimeout(r.timer);
+  revealed.delete(name);
+  renderSecrets();
+}
+function hideAllValues() {
+  for (const r of revealed.values()) clearTimeout(r.timer);
+  if (revealed.size) {
+    revealed.clear();
+    renderSecrets();
+  }
+}
+document.addEventListener('visibilitychange', () => document.hidden && hideAllValues());
+
+async function showValue(name) {
+  if (revealed.has(name)) return hideValue(name);
+  try {
+    const { value } = await api(`/secrets/${encodeURIComponent(name)}/reveal`, { method: 'POST', probe: true });
+    revealed.set(name, { value, timer: setTimeout(() => hideValue(name), REVEAL_MS) });
+    renderSecrets();
+  } catch (err) {
+    if (/admin token/.test(err.message)) return askAdminToken(() => showValue(name));
+    toast(err.message, true);
+  }
+}
+
+function revealRow(name) {
+  const { value } = revealed.get(name);
+  const code = el('code', { class: 'secret-value' }, value);
+  return el('tr', { class: 'reveal-row' },
+    el('td', { colspan: '6' },
+      el('div', { class: 'reveal-box' },
+        code,
+        el('div', { class: 'reveal-actions' },
+          el('button', {
+            class: 'small', onclick: async () => {
+              try {
+                await navigator.clipboard.writeText(value);
+                toast(`${name} copied`);
+              } catch {
+                getSelection().selectAllChildren(code);
+                toast('Copy blocked by the browser: the value is selected, press Ctrl+C');
+              }
+            },
+          }, 'Copy'),
+          el('button', { class: 'small ghost', onclick: () => hideValue(name) }, 'Hide'),
+          el('span', { class: 'muted' }, 'Hides after 30 s'),
+        ),
+      ),
+    ),
+  );
+}
+
+// Sign-in disabled mode: values still need the admin token, asked once per tab.
+const tokenDialog = $('#token-dialog');
+let afterToken = null;
+function askAdminToken(then) {
+  afterToken = then;
+  $('#token-form').reset();
+  showError('#token-error');
+  tokenDialog.showModal();
+  $('#admin-token').focus();
+}
+$('#token-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const candidate = $('#admin-token').value.trim();
+  try {
+    const who = await api('/whoami', { token: candidate });
+    if (who.scope !== 'admin' || who.anonymous) throw new Error('That is not the admin token.');
+    token = candidate;
+    try { sessionStorage.setItem(KEY, token); } catch {}
+    tokenDialog.close();
+    afterToken?.();
+  } catch (err) {
+    showError('#token-error', err.message === 'missing or invalid token' ? 'That token is not valid for this server.' : err.message);
+  }
+});
+tokenDialog.addEventListener('close', () => ($('#admin-token').value = ''));
+
 function secretRow(s, q) {
   return el('tr', {},
     el('td', { class: 'name' }, highlight(s.name, q)),
@@ -188,6 +275,7 @@ function secretRow(s, q) {
     el('td', { class: 'when', title: fullTime(s.lastUsedAt) }, ago(s.lastUsedAt)),
     el('td', { class: 'num' }, String(s.uses)),
     el('td', { class: 'row-actions' },
+      el('button', { class: 'link', 'aria-expanded': String(revealed.has(s.name)), onclick: () => showValue(s.name) }, revealed.has(s.name) ? 'Hide' : 'Show'),
       el('button', { class: 'link', onclick: () => openEdit(s) }, 'Edit'),
       el('button', { class: 'link', onclick: () => openReplace(s.name) }, 'Replace value'),
       el('button', { class: 'link danger-text', onclick: () => openDelete(s.name) }, 'Delete'),
@@ -234,7 +322,7 @@ function renderSecrets() {
         ),
       ));
     }
-    if (!closed) rows.push(...list.map((s) => secretRow(s, q)));
+    if (!closed) for (const s of list) rows.push(secretRow(s, q), ...(revealed.has(s.name) ? [revealRow(s.name)] : []));
   }
   $('#secrets-body').replaceChildren(...rows);
 }
@@ -382,12 +470,14 @@ function describe(e) {
   switch (e.type) {
     case 'command':
       return [el('span', { class: 'badge command' }, e.mode === 'interactive' ? 'shell session' : 'command'),
-        el('code', {}, e.command || '(interactive)'), e.cwd ? el('div', { class: 'muted' }, e.cwd) : null];
-    case 'secret.create': return [el('span', { class: 'badge change' }, 'created'), el('code', {}, e.name)];
+        e.mode === 'interactive' && (!e.command || e.command === '[]') ? el('span', { class: 'muted' }, 'interactive shell') : el('code', {}, e.command),
+        e.cwd ? el('div', { class: 'muted' }, e.cwd) : null];
+    case 'secret.create': return [el('span', { class: 'badge change' }, 'created'), el('code', {}, e.name), e.by === 'client' ? el('span', { class: 'muted' }, ' by an agent (sm-add)') : null];
     case 'secret.update': return [el('span', { class: 'badge change' }, 'value replaced'), el('code', {}, e.name)];
     case 'secret.note': return [el('span', { class: 'badge' }, 'note edited'), el('code', {}, e.name)];
     case 'secret.edit': return [el('span', { class: 'badge' }, 'details edited'), el('code', {}, e.name), e.category !== undefined ? el('span', { class: 'muted' }, ` → ${e.category || 'Uncategorized'}`) : null];
     case 'secret.delete': return [el('span', { class: 'badge delete' }, 'deleted'), el('code', {}, e.name)];
+    case 'secret.reveal': return [el('span', { class: 'badge change' }, 'value viewed'), el('code', {}, e.name), e.ip ? el('span', { class: 'muted' }, ` from ${e.ip.replace(/^::ffff:/, '')}`) : null];
     case 'resolve': return [el('span', { class: 'badge' }, 'values fetched'), el('span', { class: 'muted' }, `${e.count} secret${e.count === 1 ? '' : 's'} by ${e.by}`)];
     default: return [el('span', { class: 'badge' }, e.type)];
   }

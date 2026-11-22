@@ -161,3 +161,61 @@ test('categories: set on create, edit without touching the value, listed', async
   await call('/secrets/GH_TOKEN', { method: 'DELETE' });
   await call('/secrets/AWS_KEY', { method: 'DELETE' });
 });
+
+test('reveal: admin token only, logged, not counted as a use', async () => {
+  await call('/secrets/SHOWME', { method: 'PUT', body: { value: 'show-me-value-42' } });
+  const r = await call('/secrets/SHOWME/reveal', { method: 'POST' });
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).value, 'show-me-value-42');
+  assert.equal((await call('/secrets/SHOWME/reveal', { method: 'POST', token: tokens.client })).status, 401);
+  assert.equal((await call('/secrets/NOPE/reveal', { method: 'POST' })).status, 404);
+  const s = (await call('/secrets').then((x) => x.json())).secrets.find((x) => x.name === 'SHOWME');
+  assert.equal(s.uses, 0);
+  const { entries } = await call('/audit').then((x) => x.json());
+  assert.ok(entries.some((e) => e.type === 'secret.reveal' && e.name === 'SHOWME'));
+  assert.ok(!JSON.stringify(entries).includes('show-me-value'));
+  await call('/secrets/SHOWME', { method: 'DELETE' });
+});
+
+test('reveal: SM_NO_AUTH does not open it up', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sm-noauth-reveal-'));
+  const t = loadTokens(dir).tokens;
+  const store = new SecretStore(dir);
+  store.set('X', 'hidden-value-1');
+  const app = createApp({ store, tokens: t, audit: new AuditLog(path.join(dir, 'audit.log')), noAuth: true });
+  const srv = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+  const u = `http://127.0.0.1:${srv.address().port}/v1/secrets/X/reveal`;
+  try {
+    const anon = await fetch(u, { method: 'POST' });
+    assert.equal(anon.status, 401);
+    assert.equal((await anon.json()).needAdminToken, true);
+    assert.equal((await fetch(u, { method: 'POST', headers: { Authorization: `Bearer ${t.admin}` } }).then((r) => r.json())).value, 'hidden-value-1');
+  } finally {
+    srv.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('sm-add: generate, pipe, refuses argv values and existing names; sm-ls lists names only', async () => {
+  const gen = await cli('sm-add.js', ['GEN_ONE', '--generate', '40', '--category', 'T', '--note', 'test']);
+  assert.equal(gen.status, 0, gen.stderr);
+  const piped = await cli('sm-add.js', ['PIPED_ONE'], { input: 'piped-value-123456\n' });
+  assert.equal(piped.status, 0, piped.stderr);
+  assert.equal((await cli('sm-add.js', ['ARGV_ONE', 'plain-value-123'])).status, 2);
+  assert.equal((await cli('sm-add.js', ['GEN_ONE', '--generate'])).status, 3);
+  assert.equal((await cli('sm-add.js', ['GEN_ONE', '--generate', '--if-missing'])).status, 0);
+  assert.equal((await cli('sm-add.js', ['EMPTY_ONE'])).status, 2);
+  const vals = await call('/resolve', { token: tokens.client, method: 'POST' }).then((r) => r.json());
+  assert.match(vals.secrets.GEN_ONE, /^[A-Za-z0-9]{40}$/);
+  assert.equal(vals.secrets.PIPED_ONE, 'piped-value-123456');
+  assert.ok(!gen.stdout.includes(vals.secrets.GEN_ONE) && !gen.stderr.includes(vals.secrets.GEN_ONE));
+  const ls = await cli('sm-ls.js', ['one']);
+  assert.match(ls.stdout, /GEN_ONE\s+T\s+test/);
+  assert.ok(!ls.stdout.includes('piped-value'));
+  const q = await cli('sm-ls.js', ['-q', 'piped']);
+  assert.equal(q.stdout, 'PIPED_ONE\n');
+  const { entries } = await call('/audit').then((r) => r.json());
+  assert.ok(entries.some((e) => e.type === 'secret.create' && e.name === 'PIPED_ONE' && e.by === 'client'));
+  await call('/secrets/GEN_ONE', { method: 'DELETE' });
+  await call('/secrets/PIPED_ONE', { method: 'DELETE' });
+});

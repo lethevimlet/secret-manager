@@ -41,7 +41,7 @@
       <div class="page-head">
         <div>
           <h2>Secrets</h2>
-          <p class="muted">Values are write-only: they can be replaced, never shown. Agents use them as <code>$NAME</code> or <code>{{secret:NAME}}</code> in <code>sm</code>.</p>
+          <p class="muted">Values stay hidden until you click Show (needs the admin token; every view is logged). Agents use them as <code>$NAME</code> or <code>{{secret:NAME}}</code> in <code>sm</code>.</p>
         </div>
         <button id="add-toggle" class="primary">Add secret</button>
       </div>
@@ -166,6 +166,20 @@
   </dialog>
 
   <datalist id="category-list"></datalist>
+
+  <dialog id="token-dialog">
+    <form method="dialog" id="token-form">
+      <h3>Admin token needed</h3>
+      <p class="muted">Sign-in is disabled for managing secrets, but viewing a value always needs the admin token. It is kept for this browser tab only. Get it with <code>smctl gui --no-open</code>.</p>
+      <label for="admin-token">Admin token</label>
+      <input id="admin-token" type="password" required autocomplete="off" spellcheck="false" placeholder="sma_…">
+      <p id="token-error" class="error" role="alert" hidden></p>
+      <div class="actions">
+        <button type="button" class="ghost" data-close>Cancel</button>
+        <button class="primary" type="submit" value="ok">Continue</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="delete-dialog">
     <form method="dialog" id="delete-form">

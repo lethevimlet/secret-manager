@@ -93,6 +93,21 @@ export async function setSecret(name, value, note, category) {
   await request(`/secrets/${encodeURIComponent(name)}`, { method: 'PUT', body: { value, note, category }, admin: true, cfg });
 }
 
+// Create only; throws `exists` if the name is taken. Client token is enough.
+export async function createSecret(name, value, note, category) {
+  const cfg = loadConfig();
+  if (!usesServer(cfg)) {
+    if (name in file.loadSecrets()) throw Object.assign(new Error(`${name} already exists`), { exists: true });
+    return file.setSecret(name, value);
+  }
+  try {
+    await request('/secrets', { method: 'POST', body: { name, value, note, category }, cfg });
+  } catch (err) {
+    if (/already exists/.test(err.message)) err.exists = true;
+    throw err;
+  }
+}
+
 export async function removeSecret(name) {
   const cfg = loadConfig();
   if (!usesServer(cfg)) return file.removeSecret(name);

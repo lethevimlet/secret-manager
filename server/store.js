@@ -124,6 +124,11 @@ export class SecretStore {
     return true;
   }
 
+  // One value, for the owner viewing it in the GUI. Not counted as a use.
+  reveal(name) {
+    return this.has(name) ? this.decrypt(name, this.data[name]) : null;
+  }
+
   // All values, for the sm shell. Marks them as used.
   resolveAll() {
     const out = {};

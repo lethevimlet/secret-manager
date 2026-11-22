@@ -26,8 +26,10 @@ smctl gui                  # prints/opens the GUI URL, already signed in
 smctl status
 ```
 
-- **Admin token** (`sma_…`): add, replace, delete, read the activity log. Used
-  by the GUI and `smctl`. Values are write-only: nothing returns them.
+- **Admin token** (`sma_…`): add, replace, delete, view values, read the activity
+  log. Used by the GUI and `smctl`. Viewing a value (GUI "Show") always needs
+  this token, even with `SM_NO_AUTH=1`; each view is logged with the client IP,
+  and the value hides again after 30 s or when the browser tab is hidden.
 - **Client token** (`smc_…`): what `sm` uses to fetch values and report the
   commands it ran.
 - Plain HTTP only on localhost. For the LAN add an HTTPS listener with
@@ -65,10 +67,24 @@ red `sm ` tag (`SM_PROMPT='[sm] '` to change it, `SM_PROMPT=` to turn it off).
 `sm` accepts bash's arguments: `-c CMD`, `-lc`, `-o pipefail`, `--norc`,
 `script.sh args`, commands on stdin, interactive.
 
+## sm-ls and sm-add
+
+```bash
+sm-ls                    # NAME, CATEGORY, NOTE (never values); sm-ls github, -q, --json
+sm-add JWT_SECRET --generate 48 --category MyApp --note "signing key"
+some-command-printing-a-token | sm-add NEW_TOKEN --category X
+```
+
+`sm-add` only creates: it refuses an existing name (exit 3, `--if-missing` =
+exit 0) and refuses a value given as an argument, so the value never shows up
+in `ps`, shell history or an agent's transcript. It works with the client
+token, so agents can use it; the GUI's Activity marks those as created "by an
+agent (sm-add)". Replacing or deleting stays with the admin token (GUI/smctl).
+
 ## Agent skill
 
 `skills/secret-manager/SKILL.md` teaches agents to find secrets with
-`smctl list -l`, run commands as `sm -c '… $NAME …'`, and read anything
+`sm-ls`, create new ones with `sm-add`, run commands as `sm -c '… $NAME …'`, and read anything
 that might contain a secret (.env, configs, logs, env dumps) through `sm` so it
 is blocked before it reaches their context. Install it once for
 both Claude Code and opencode (opencode also reads `~/.claude/skills`):

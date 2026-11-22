@@ -108,6 +108,16 @@ export function createApp({ store, tokens, audit, noAuth = false }) {
 
   api.get('/secrets', (_req, res) => res.json({ secrets: store.list(), categories: store.categories() }));
 
+  // Create only (agents, via sm-add with the client token): never replaces.
+  api.post('/secrets', (req, res) => {
+    const { name, value, note, category } = req.body || {};
+    if (typeof name !== 'string') return res.status(400).json({ error: 'name required' });
+    if (store.has(name)) return res.status(409).json({ error: `${name} already exists` });
+    store.set(name, value, note, category);
+    audit.add({ type: 'secret.create', name, by: req.anonymous ? 'anonymous' : req.scope });
+    res.status(201).json({ name, created: true });
+  });
+
   api.put('/secrets/:name', need('admin'), (req, res) => {
     const { name } = req.params;
     const { value, note, category } = req.body || {};
@@ -132,7 +142,17 @@ export function createApp({ store, tokens, audit, noAuth = false }) {
     res.status(204).end();
   });
 
-  // The only route that returns values.
+  // One value, for the owner in the GUI. Always needs the real admin token,
+  // also when SM_NO_AUTH=1 lets the rest of the GUI work without one.
+  api.post('/secrets/:name/reveal', (req, res) => {
+    if (req.scope !== 'admin' || req.anonymous) return res.status(401).json({ error: 'viewing values needs the admin token', needAdminToken: true });
+    const value = store.reveal(req.params.name);
+    if (value === null) return res.status(404).json({ error: 'no such secret' });
+    audit.add({ type: 'secret.reveal', name: req.params.name, by: 'admin', ip: req.socket.remoteAddress });
+    res.json({ name: req.params.name, value });
+  });
+
+  // All values, for the sm shell.
   api.post('/resolve', (req, res) => {
     if (req.anonymous) return res.status(401).json({ error: 'fetching values always needs a token' });
     const secrets = store.resolveAll();

@@ -1,6 +1,6 @@
 ---
 name: secret-manager
-description: Use whenever a task needs an API key, token, password, credential or other secret (calling an authenticated API, logging in to a service, deploying, configuring env vars, auth headers), AND before reading anything that might contain one (.env files, config files, credentials, logs, environment dumps, docker/k8s/CI output, shell history). Secrets on this machine live in the sm secret manager; you never see their values, and output that could contain them must be read through the `sm` shell so they are blocked.
+description: Use whenever a task needs an API key, token, password, credential or other secret (calling an authenticated API, logging in to a service, deploying, configuring env vars, auth headers, generating a new password or signing key), AND before reading anything that might contain one (.env files, config files, credentials, logs, environment dumps, docker/k8s/CI output, shell history). Secrets on this machine live in the sm secret manager; you never see their values, and output that could contain them must be read through the `sm` shell so they are blocked.
 ---
 
 # Using secrets through `sm`
@@ -11,12 +11,45 @@ You use them by name, and `sm` puts the real value in at run time.
 ## Find out what exists
 
 ```bash
-smctl list -l      # name, category, last update, uses, note. Never values.
+sm-ls              # NAME, CATEGORY, NOTE of every secret. Never values.
+sm-ls github       # only entries whose name, category or note matches
+sm-ls -q           # names only
 ```
 
-Pick the secret by its name and note. If nothing fits, **ask the user to add it**
-(GUI, or `printf %s 'VALUE' | smctl set NAME --category X --note "..."`).
-Never ask the user to paste a secret value into the chat.
+Pick the secret by its name and note. If nothing fits and the value is
+something you can create yourself, use `sm-add` (below). If it's a key only the
+user has (an account's API key, a password), **ask the user to add it** in the
+sm GUI. Never ask the user to paste a secret value into the chat.
+
+## Create a secret: `sm-add`
+
+`sm-add` stores a **new** secret without the value ever appearing in your
+context, a command line or a file. It never replaces an existing secret (that
+is up to the user, in the GUI) and exits 3 if the name is taken.
+
+```bash
+# a random value: passwords, JWT/session signing keys, webhook secrets...
+sm-add APP_JWT_SECRET --generate 48 --category MyApp --note "JWT signing key"
+sm-add DB_PASSWORD --generate 32 --charset alnum --category MyApp
+
+# a value produced by a command: pipe it straight in, never print it first
+sm -c 'gh auth token' | sm-add GITHUB_TOKEN --category GitHub
+sm -c 'aws iam create-access-key --user-name ci --output json' \
+  | jq -r .AccessKey.SecretAccessKey | sm-add CI_AWS_SECRET --category Cloud
+```
+
+- **Run `sm-ls` first.** If a secret for the same purpose already exists, use
+  it instead of creating another one. If `sm-add` says the name exists (exit
+  3), don't create a variant like `NAME_2` or `NAME_<date>`: use the existing
+  one, or ask the user whether it should be replaced (they do that in the GUI).
+- The value is **never** an argument (`sm-add NAME value` is refused): use
+  `--generate [LENGTH]` (`--charset alnum|hex|base64url|symbols`) or a pipe.
+- Pipe only the value itself (extract it with `jq`, `cut`, … in the same
+  pipeline), never a whole JSON or log output.
+- `--if-missing` makes an existing name a no-op (exit 0) for re-runnable setup.
+- Always set `--category` and a `--note` saying what it is for.
+- Then use it as `$NAME` inside `sm`. In config files and templates write the
+  name (`JWT_SECRET=$APP_JWT_SECRET`), never the value.
 
 ## Use a secret
 
@@ -44,7 +77,7 @@ quoting (`sm -c "curl -H 'X-Api-Key: {{secret:API_KEY}}' …"`).
 - Any secret value in output is replaced by `[BLOCKED:NAME]`. That is
   expected and means the real value was used. Don't treat it as an error.
 - `sm: unknown secret: NAME` means no secret has that name: check
-  `smctl list`.
+  `sm-ls`.
 - `sm: secret server … unreachable; running without secrets`: tell the user
   the secret server is down.
 
@@ -81,8 +114,10 @@ something that looks like a key, token or password (long random strings,
 
 - don't repeat it, quote it or copy it anywhere, and don't keep working with it;
 - tell the user which file or command showed it (not the value) and suggest
-  adding it to sm, e.g. `printf %s 'VALUE' | smctl set NAME` typed by the user
-  in their own terminal, then replacing it in the file with `$NAME`.
+  adding it to sm in the GUI, then replacing it in the file with `$NAME`.
+  If the value is in a file, you may move it without seeing it, e.g.
+  `sm -c "grep '^STRIPE_KEY=' .env | cut -d= -f2-" | sm-add STRIPE_KEY` (with the
+  user's OK), since the pipe never shows the value to you.
 
 ## Rules
 
@@ -95,6 +130,8 @@ something that looks like a key, token or password (long random strings,
   config files and `.env` templates, use the variable name or the
   `{{secret:NAME}}` placeholder.
 - Don't read `.sm-server/`, `.sm/`, `~/.config/sm/` or `/proc/*/environ`
-  to get at secrets or tokens.
+  to get at secrets or tokens, and never call the sm server's API yourself
+  (`/v1/secrets/*/reveal`, `/v1/resolve`): viewing values in the GUI is
+  for the user only.
 - Use `-c '…'` with single quotes so `$NAME` is expanded inside `sm`, not by
   your own shell (where it is empty).

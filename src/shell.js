@@ -127,7 +127,7 @@ export async function runShell(args) {
       if (process.env.SM_AUDIT !== '0') {
         await recordAudit({
           mode: interactive ? 'interactive' : hasC ? 'command' : 'script',
-          command: commandIndex >= 0 ? args[commandIndex] : args, // as written: placeholders only
+          command: commandIndex >= 0 ? args[commandIndex] : args.join(' '), // as written: placeholders only
           placeholders: [...used],
           envPlaceholders: [...new Set(Object.values(process.env).flatMap(findNames))],
           redactions: redactor.counts,

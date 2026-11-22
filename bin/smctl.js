@@ -7,6 +7,7 @@
 //   smctl passwd              set/reset the GUI password (admin token; new password on stdin or prompted)
 //   smctl set NAME [--note TEXT] [--category NAME]   value from stdin (never argv)
 //   smctl list                names only
+//   smctl rotate NAME [--length N] [--charset alnum|hex|base64url|symbols]   new random value, made on the server
 //   smctl rm NAME
 //   smctl env                 `export NAME='{{secret:NAME}}'` lines
 //   smctl audit [N]
@@ -150,6 +151,14 @@ async function main() {
       }
       return 0;
     }
+    case 'rotate': {
+      const length = Number(flag('--length') || 32);
+      const charset = flag('--charset') || 'alnum';
+      if (!rest[0]) return fail('usage: smctl rotate NAME [--length N] [--charset alnum|hex|base64url|symbols]');
+      const r = await backend.rotateSecret(rest[0], length, charset);
+      process.stderr.write(`smctl: ${rest[0]} rotated (${r.length} random ${charset} chars). Update anything that still uses the old value.\n`);
+      return 0;
+    }
     case 'rm':
       if (!rest[0]) return fail('usage: smctl rm NAME');
       return (await backend.removeSecret(rest[0])) ? 0 : fail(`no such secret: ${rest[0]}`);
@@ -160,7 +169,7 @@ async function main() {
       for (const e of await backend.readAudit(Number(rest[0] || 20))) process.stdout.write(JSON.stringify(e) + '\n');
       return 0;
     default:
-      return fail('usage: smctl {login|logout|status|gui|setup-code|passwd|set NAME|list [-l]|rm NAME|env|audit [N]}');
+      return fail('usage: smctl {login|logout|status|gui|setup-code|passwd|set NAME|rotate NAME|list [-l]|rm NAME|env|audit [N]}');
   }
 }
 

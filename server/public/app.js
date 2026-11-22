@@ -259,6 +259,16 @@ function hideAllValues() {
 }
 document.addEventListener('visibilitychange', () => document.hidden && hideAllValues());
 
+// Show the current value (after rotating/generating), replacing an older one on screen.
+async function revealFresh(name) {
+  const r = revealed.get(name);
+  if (r) {
+    clearTimeout(r.timer);
+    revealed.delete(name);
+  }
+  await showValue(name);
+}
+
 async function showValue(name) {
   if (revealed.has(name)) return hideValue(name);
   try {
@@ -334,6 +344,7 @@ function secretRow(s, q) {
     el('td', { class: 'row-actions' },
       el('button', { class: 'link', 'aria-expanded': String(revealed.has(s.name)), onclick: () => showValue(s.name) }, revealed.has(s.name) ? 'Hide' : 'Show'),
       el('button', { class: 'link', onclick: () => openEdit(s) }, 'Edit'),
+      el('button', { class: 'link', title: 'Replace with a new random value', onclick: () => openRotate(s.name) }, 'Rotate'),
       el('button', { class: 'link', onclick: () => openReplace(s.name) }, 'Replace value'),
       el('button', { class: 'link danger-text', onclick: () => openDelete(s.name) }, 'Delete'),
     ),
@@ -433,8 +444,40 @@ $('#edit-form').addEventListener('submit', async (e) => {
   }
 });
 
+// Rotate: random value generated on the server.
+const rotateDialog = $('#rotate-dialog');
+let rotateTarget = null;
+function openRotate(name) {
+  rotateTarget = name;
+  $('#rotate-name').textContent = name;
+  showError('#rotate-error');
+  rotateDialog.showModal();
+  $('#rotate-length').focus();
+}
+$('#rotate-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    const r = await api(`/secrets/${encodeURIComponent(rotateTarget)}`, {
+      method: 'PUT', body: { generate: { length: Number($('#rotate-length').value), charset: $('#rotate-charset').value } },
+    });
+    rotateDialog.close();
+    toast(`${rotateTarget} rotated (${r.length} chars)`);
+    await loadSecrets();
+    await revealFresh(rotateTarget);
+  } catch (err) {
+    showError('#rotate-error', err.message);
+  }
+});
+
 // Add
 const addForm = $('#add-form');
+$('#add-generate').addEventListener('change', (e) => {
+  const gen = e.target.checked;
+  $('#add-gen').hidden = !gen;
+  $('#add-value-row').hidden = gen;
+  $('#add-value').required = !gen;
+  $('#add-warn').hidden = true;
+});
 $('#add-toggle').addEventListener('click', () => {
   addForm.hidden = !addForm.hidden;
   if (!addForm.hidden) {
@@ -455,10 +498,24 @@ addForm.addEventListener('submit', async (e) => {
   const name = $('#add-name').value.trim();
   if (secrets.some((s) => s.name === name)) return showError('#add-error', `${name} already exists. Use "Replace value" in its row.`);
   try {
-    await api(`/secrets/${encodeURIComponent(name)}`, { method: 'PUT', body: { value: $('#add-value').value, note: $('#add-note').value, category: $('#add-category').value } });
+    const gen = $('#add-generate').checked;
+    await api(`/secrets/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: {
+        ...(gen ? { generate: { length: Number($('#add-length').value), charset: $('#add-charset').value } } : { value: $('#add-value').value }),
+        note: $('#add-note').value, category: $('#add-category').value,
+      },
+    });
     addForm.reset();
     addForm.hidden = true;
     $('#add-warn').hidden = true;
+    $('#add-generate').dispatchEvent(new Event('change'));
+    if (gen) {
+      toast(`${name} saved with a random value`);
+      await loadSecrets();
+      await revealFresh(name);
+      return;
+    }
     toast(`${name} saved`);
     loadSecrets();
   } catch (err) {
@@ -531,6 +588,7 @@ function describe(e) {
         e.cwd ? el('div', { class: 'muted' }, e.cwd) : null];
     case 'secret.create': return [el('span', { class: 'badge change' }, 'created'), el('code', {}, e.name), e.by === 'client' ? el('span', { class: 'muted' }, ' by an agent (sm-add)') : null];
     case 'secret.update': return [el('span', { class: 'badge change' }, 'value replaced'), el('code', {}, e.name)];
+    case 'secret.rotate': return [el('span', { class: 'badge change' }, 'rotated'), el('code', {}, e.name), e.generated ? el('span', { class: 'muted' }, ` → ${e.generated.length} random ${e.generated.charset} chars`) : null];
     case 'secret.note': return [el('span', { class: 'badge' }, 'note edited'), el('code', {}, e.name)];
     case 'secret.edit': return [el('span', { class: 'badge' }, 'details edited'), el('code', {}, e.name), e.category !== undefined ? el('span', { class: 'muted' }, ` → ${e.category || 'Uncategorized'}`) : null];
     case 'secret.delete': return [el('span', { class: 'badge delete' }, 'deleted'), el('code', {}, e.name)];

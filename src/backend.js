@@ -108,6 +108,15 @@ export async function createSecret(name, value, note, category) {
   }
 }
 
+// Replace a value with a random one generated on the server (admin).
+export async function rotateSecret(name, length, charset) {
+  const cfg = loadConfig();
+  if (!usesServer(cfg)) throw new Error('rotate needs the sm server (smctl login)');
+  const known = (await request('/secrets', { cfg })).secrets.some((s) => s.name === name);
+  if (!known) throw new Error(`no such secret: ${name}`);
+  return request(`/secrets/${encodeURIComponent(name)}`, { method: 'PUT', body: { generate: { length, charset } }, admin: true, cfg });
+}
+
 export async function removeSecret(name) {
   const cfg = loadConfig();
   if (!usesServer(cfg)) return file.removeSecret(name);

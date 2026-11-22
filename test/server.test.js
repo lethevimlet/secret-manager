@@ -271,3 +271,29 @@ test('GUI password: setup code off-loopback, scrypt hash, login, CSRF guard, loc
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('rotate: server-generated values, charset/length, audit without values, smctl rotate', async () => {
+  await call('/secrets/ROT', { method: 'PUT', body: { value: 'manual-value-123', category: 'R', note: 'keep me' } });
+  const r = await call('/secrets/ROT', { method: 'PUT', body: { generate: { length: 40, charset: 'hex' } } }).then((x) => x.json());
+  assert.deepEqual([r.created, r.generated, r.length], [false, true, 40]);
+  assert.ok(!JSON.stringify(r).includes('value'));
+  let v = (await call('/resolve', { token: tokens.client, method: 'POST' }).then((x) => x.json())).secrets.ROT;
+  assert.match(v, /^[0-9a-f]{40}$/);
+  const meta = (await call('/secrets').then((x) => x.json())).secrets.find((s) => s.name === 'ROT');
+  assert.deepEqual([meta.category, meta.note], ['R', 'keep me']);
+  assert.equal((await call('/secrets/ROT', { method: 'PUT', body: { generate: { length: 4 } } })).status, 400);
+  assert.equal((await call('/secrets/ROT', { method: 'PUT', body: { generate: { charset: 'emoji' } } })).status, 400);
+  assert.equal((await call('/secrets/ROT', { method: 'PUT', token: tokens.client, body: { generate: {} } })).status, 403);
+  const { entries } = await call('/audit').then((x) => x.json());
+  const e = entries.find((x) => x.type === 'secret.rotate' && x.name === 'ROT');
+  assert.deepEqual(e.generated, { length: 40, charset: 'hex' });
+  assert.ok(!JSON.stringify(entries).includes(v));
+  const cliR = await cli('smctl.js', ['rotate', 'ROT', '--length', '24', '--charset', 'symbols'], { admin: true });
+  assert.equal(cliR.status, 0, cliR.stderr);
+  const v2 = (await call('/resolve', { token: tokens.client, method: 'POST' }).then((x) => x.json())).secrets.ROT;
+  assert.equal(v2.length, 24);
+  assert.notEqual(v2, v);
+  assert.ok(!cliR.stderr.includes(v2) && !cliR.stdout.includes(v2));
+  assert.notEqual((await cli('smctl.js', ['rotate', 'NOPE_X'], { admin: true })).status, 0);
+  await call('/secrets/ROT', { method: 'DELETE' });
+});

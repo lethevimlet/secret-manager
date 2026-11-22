@@ -61,7 +61,7 @@
       <div class="page-head">
         <div>
           <h2>Secrets</h2>
-          <p class="muted">Values stay hidden until you click Show (needs the admin token; every view is logged). Agents use them as <code>$NAME</code> or <code>{{secret:NAME}}</code> in <code>sm</code>.</p>
+          <p class="muted">Values stay hidden until you click Show (every view is logged). Rotate replaces one with a new random value. Agents use them as <code>$NAME</code> or <code>{{secret:NAME}}</code> in <code>sm</code>.</p>
         </div>
         <button id="add-toggle" class="primary">Add secret</button>
       </div>
@@ -74,9 +74,23 @@
         </div>
         <div class="field">
           <label for="add-value">Value</label>
-          <div class="reveal">
+          <div class="reveal" id="add-value-row">
             <input id="add-value" type="password" required autocomplete="off" spellcheck="false">
             <button type="button" class="ghost small" data-reveal="add-value">Show</button>
+          </div>
+          <label class="check gen-toggle"><input id="add-generate" type="checkbox"> Generate a random value (made on the server, shown after saving)</label>
+          <div id="add-gen" hidden>
+          <div class="gen-opts">
+            <label class="inline">Length <input id="add-length" type="number" min="8" max="4096" value="32"></label>
+            <label class="inline">Characters
+              <select id="add-charset">
+                <option value="alnum">Letters + digits</option>
+                <option value="symbols">Letters, digits + symbols</option>
+                <option value="base64url">Base64url</option>
+                <option value="hex">Hex</option>
+              </select>
+            </label>
+          </div>
           </div>
           <small id="add-warn" class="warn" hidden>Short values (under 8 characters) also redact unrelated output that contains them.</small>
         </div>
@@ -215,6 +229,30 @@
       <div class="actions">
         <button type="button" class="ghost" data-close>Cancel</button>
         <button class="primary" type="submit" value="ok">Continue</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="rotate-dialog">
+    <form method="dialog" id="rotate-form">
+      <h3>Rotate <code id="rotate-name"></code></h3>
+      <p class="muted">Replaces the value with a new random one, generated on the server. Agents get the new value from their next <code>sm</code> command.</p>
+      <p class="warn rotate-warn">Anything that still uses the old value (a database user, an external service, a deployed app) must be updated to the new one, or it stops working. The new value is shown right after rotating so you can copy it.</p>
+      <div class="gen-opts">
+            <label class="inline">Length <input id="rotate-length" type="number" min="8" max="4096" value="32"></label>
+            <label class="inline">Characters
+              <select id="rotate-charset">
+                <option value="alnum">Letters + digits</option>
+                <option value="symbols">Letters, digits + symbols</option>
+                <option value="base64url">Base64url</option>
+                <option value="hex">Hex</option>
+              </select>
+            </label>
+          </div>
+      <p id="rotate-error" class="error" role="alert" hidden></p>
+      <div class="actions">
+        <button type="button" class="ghost" data-close>Cancel</button>
+        <button class="primary" type="submit" value="ok">Rotate</button>
       </div>
     </form>
   </dialog>

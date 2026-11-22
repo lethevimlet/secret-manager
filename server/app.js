@@ -9,6 +9,7 @@ import path from 'node:path';
 import express from 'express';
 import { fileURLToPath } from 'node:url';
 import { COOKIE, MIN_PASSWORD, readCookie, isLoopback } from './auth.js';
+import { generateValue } from '../src/generate.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 
@@ -201,10 +202,14 @@ export function createApp({ store, tokens, audit, noAuth = false, guiAuth = null
 
   api.put('/secrets/:name', need('admin'), (req, res) => {
     const { name } = req.params;
-    const { value, note, category } = req.body || {};
+    const { note, category, generate } = req.body || {};
+    // `generate: { length, charset }` = a random value made here, so it never
+    // travels over the network or through the browser (rotation).
+    const value = generate ? generateValue(generate.length ?? 32, generate.charset ?? 'alnum') : req.body?.value;
     const created = store.set(name, value, note, category);
-    audit.add({ type: created ? 'secret.create' : 'secret.update', name, by: req.anonymous ? 'anonymous' : 'admin' });
-    res.status(created ? 201 : 200).json({ name, created });
+    const type = created ? 'secret.create' : generate ? 'secret.rotate' : 'secret.update';
+    audit.add({ type, name, ...(generate && { generated: { length: value.length, charset: generate.charset ?? 'alnum' } }), by: req.anonymous ? 'anonymous' : 'admin' });
+    res.status(created ? 201 : 200).json({ name, created, ...(generate && { generated: true, length: value.length }) });
   });
 
   api.patch('/secrets/:name', need('admin'), (req, res) => {

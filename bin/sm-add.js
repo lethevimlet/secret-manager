@@ -6,22 +6,15 @@
 //   some-command-that-prints-a-token | sm-add NAME
 //   sm-add NAME            (interactive terminal: asks for the value, hidden)
 //   options: --category NAME  --note TEXT  --if-missing (exit 0 if it exists)
-import crypto from 'node:crypto';
 import { NAME_RE } from '../src/store.js';
 import { createSecret } from '../src/backend.js';
+import { generateValue as gen } from '../src/generate.js';
 
 const USAGE = `usage: sm-add NAME --generate [LENGTH] [--charset alnum|hex|base64url|symbols]
        COMMAND | sm-add NAME
        options: --category NAME  --note TEXT  --if-missing
 The value is never taken from the command line. Existing secrets are never replaced.
 `;
-const CHARSETS = {
-  alnum: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789',
-  hex: '0123456789abcdef',
-  base64url: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_',
-  symbols: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#%+-.:=?@^_~',
-};
-
 const args = process.argv.slice(2);
 const fail = (msg, code = 2) => {
   process.stderr.write(`sm-add: ${msg}\n`);
@@ -62,18 +55,11 @@ if (extra.length) fail('the value is never taken from the command line: use --ge
 if (!NAME_RE.test(name)) fail('invalid name: letters, digits and _, not starting with a digit');
 
 function generateValue(len, set) {
-  const chars = CHARSETS[set];
-  if (!chars) fail(`unknown charset ${set} (alnum, hex, base64url, symbols)`);
-  if (len < 8 || len > 4096) fail('length must be between 8 and 4096');
-  // Rejection sampling: no modulo bias.
-  const out = [];
-  const limit = 256 - (256 % chars.length);
-  while (out.length < len) {
-    for (const b of crypto.randomBytes(len * 2)) {
-      if (b < limit && out.length < len) out.push(chars[b % chars.length]);
-    }
+  try {
+    return gen(len, set);
+  } catch (err) {
+    fail(err.message);
   }
-  return out.join('');
 }
 
 async function readValue() {

@@ -59,6 +59,10 @@ smctl status
 - Remote clients: `smctl login --server https://HOST:8737 --token … --admin-token … --ca ca.crt`.
 - `smctl login --gui-url https://HOST:8737` makes `smctl gui` print the LAN address.
 - If the server is down, `sm` still runs commands, without secrets, and warns.
+- **Rotate** (GUI row button, or `smctl rotate NAME [--length N] [--charset alnum|hex|base64url|symbols]`)
+  replaces a value with a random one generated on the server; the Add form can
+  generate one too. The GUI shows the new value right away so you can update
+  whatever uses it. Category and note are kept; Activity logs length and charset.
 - Secrets can have a category (`smctl set NAME --category GitHub`, or the GUI).
   The GUI groups the list by category, filters with category chips and
   searches name, category and note (press `/`).

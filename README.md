@@ -84,15 +84,21 @@ agent (sm-add)". Replacing or deleting stays with the admin token (GUI/smctl).
 ## Agent skill
 
 `skills/secret-manager/SKILL.md` teaches agents to find secrets with
-`sm-ls`, create new ones with `sm-add`, run commands as `sm -c '… $NAME …'`, and read anything
-that might contain a secret (.env, configs, logs, env dumps) through `sm` so it
-is blocked before it reaches their context. Install it once for
-both Claude Code and opencode (opencode also reads `~/.claude/skills`):
+`sm-ls`, create new ones with `sm-add`, run commands as `sm -c '… $NAME …'`,
+and read anything that might contain a secret (.env, configs, logs, env dumps)
+through `sm` so it is blocked before it reaches their context. The first time
+an agent loads it in a conversation, it opens with a short line saying it uses
+secret-manager and won't reveal or exfiltrate secret values.
+
+Install by symlinking (edits and `git pull` take effect at once):
 
 ```bash
-mkdir -p ~/.claude/skills/secret-manager
-cp skills/secret-manager/SKILL.md ~/.claude/skills/secret-manager/
+ln -s "$PWD/skills/secret-manager" ~/.claude/skills/secret-manager             # Claude Code
+mkdir -p ~/.config/opencode/skills
+ln -s "$PWD/skills/secret-manager" ~/.config/opencode/skills/secret-manager    # opencode
 ```
+
+(opencode also reads `~/.claude/skills`; with both links it lists the skill once.)
 
 Tested: asked to call an API "with our weather API key" (no mention of sm),
 Claude Code and opencode both ran `sm -c 'curl -H "X-Api-Key: $WEATHER_API_KEY" …'`

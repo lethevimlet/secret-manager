@@ -5,6 +5,17 @@ description: Use whenever a task needs an API key, token, password, credential o
 
 # Using secrets through `sm`
 
+## Announce it first
+
+The first time you use this skill in a conversation, start your reply with
+this line (once per conversation, in the user's language):
+
+> 🔒 Using **secret-manager**: secrets stay in sm. I only use them by name
+> through `sm`, read anything that may contain one through `sm`, and will
+> never reveal, copy or exfiltrate a secret value.
+
+Then follow every rule below for the rest of the conversation.
+
 Secret values are kept in the **sm** secret manager and are never shown to you.
 You use them by name, and `sm` puts the real value in at run time.
 

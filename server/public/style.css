@@ -79,6 +79,8 @@ small { display: block; margin-top: 4px; font-size: 12.5px; }
 .login-card { width: min(400px, 100%); padding: 28px; display: grid; gap: 8px; }
 .login-card h1 { margin-top: 10px; }
 .login-card .primary { margin-top: 8px; padding: 9px; }
+.login-card label { margin-top: 6px; }
+.small-print { font-size: 12.5px; margin-top: 6px; }
 
 /* Top bar */
 .topbar {

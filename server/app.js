@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
 import { fileURLToPath } from 'node:url';
+import { COOKIE, MIN_PASSWORD, readCookie, isLoopback } from './auth.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 
@@ -65,7 +66,7 @@ export class AuditLog {
   }
 }
 
-export function createApp({ store, tokens, audit, noAuth = false }) {
+export function createApp({ store, tokens, audit, noAuth = false, guiAuth = null }) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', false);
@@ -89,12 +90,72 @@ export function createApp({ store, tokens, audit, noAuth = false }) {
     next();
   });
 
-  // Resolve the caller's scope from the bearer token.
+  // ---- GUI password login (before the token check) ----
+  const ip = (req) => (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+  const setCookie = (req, res, id, maxAge) =>
+    res.cookie(COOKIE, id, { httpOnly: true, sameSite: 'strict', secure: Boolean(req.socket.encrypted), path: '/', maxAge });
+  const fail = (res, status, error, extra = {}) => res.status(status).json({ error, ...extra });
+
+  if (guiAuth) {
+    api.get('/auth/status', (req, res) =>
+      res.json({
+        passwordSet: guiAuth.passwordSet,
+        loggedIn: guiAuth.checkSession(readCookie(req, COOKIE)),
+        setupNeedsCode: !guiAuth.passwordSet && !isLoopback(req),
+        minPassword: MIN_PASSWORD,
+      }));
+
+    api.post('/auth/setup', async (req, res) => {
+      if (guiAuth.passwordSet) return fail(res, 409, 'a password is already set');
+      const wait = guiAuth.blockedFor(ip(req));
+      if (wait) return fail(res, 429, `too many attempts, wait ${wait} s`);
+      if (!isLoopback(req) && !guiAuth.checkSetupCode(req.body?.code)) {
+        guiAuth.noteFailure(ip(req));
+        audit.add({ type: 'auth.setup-failed', ip: ip(req) });
+        return fail(res, 403, 'wrong setup code (run smctl setup-code on the server)');
+      }
+      await guiAuth.setPassword(req.body?.password);
+      audit.add({ type: 'auth.setup', ip: ip(req) });
+      const { id, maxAge } = guiAuth.createSession();
+      setCookie(req, res, id, maxAge);
+      res.status(201).json({ ok: true });
+    });
+
+    api.post('/auth/login', async (req, res) => {
+      if (!guiAuth.passwordSet) return fail(res, 409, 'no password set yet');
+      const wait = guiAuth.blockedFor(ip(req));
+      if (wait) return fail(res, 429, `too many wrong passwords, wait ${wait} s`, { retryAfter: wait });
+      if (!(await guiAuth.verify(req.body?.password))) {
+        guiAuth.noteFailure(ip(req));
+        audit.add({ type: 'auth.login-failed', ip: ip(req) });
+        return fail(res, 401, 'wrong password');
+      }
+      guiAuth.noteSuccess(ip(req));
+      audit.add({ type: 'auth.login', ip: ip(req) });
+      const { id, maxAge } = guiAuth.createSession();
+      setCookie(req, res, id, maxAge);
+      res.json({ ok: true });
+    });
+
+    api.post('/auth/logout', (req, res) => {
+      guiAuth.endSession(readCookie(req, COOKIE));
+      res.clearCookie(COOKIE, { path: '/' });
+      res.status(204).end();
+    });
+  }
+
+  // Resolve the caller's scope: bearer token, or a GUI session cookie.
   api.use((req, res, next) => {
     const m = /^Bearer (.+)$/.exec(req.get('authorization') || '');
     if (m && sameToken(m[1], tokens.admin)) req.scope = 'admin';
     else if (m && sameToken(m[1], tokens.client)) req.scope = 'client';
-    else if (noAuth && !m) {
+    else if (!m && guiAuth && guiAuth.checkSession(readCookie(req, COOKIE))) {
+      // Cookies are sent by the browser automatically, so changes made with
+      // one must carry a header other sites can't add (CSRF guard).
+      if (req.method !== 'GET' && req.get('x-sm-gui') !== '1') return res.status(403).json({ error: 'missing X-SM-GUI header' });
+      req.scope = 'admin';
+      req.session = true;
+    } else if (noAuth && !m) {
       // Testing mode: management without a token, but never secret values.
       req.scope = 'admin';
       req.anonymous = true;
@@ -104,7 +165,27 @@ export function createApp({ store, tokens, audit, noAuth = false }) {
   const need = (scope) => (req, res, next) =>
     scope === 'client' || req.scope === 'admin' ? next() : res.status(403).json({ error: `${scope} token required` });
 
-  api.get('/whoami', (req, res) => res.json({ scope: req.scope, anonymous: Boolean(req.anonymous) }));
+  api.get('/whoami', (req, res) => res.json({ scope: req.scope, anonymous: Boolean(req.anonymous), session: Boolean(req.session) }));
+
+  // Admin: one-time setup code / change or reset the GUI password.
+  if (guiAuth) {
+    api.get('/auth/setup-code', need('admin'), (req, res) => {
+      if (req.session) return fail(res, 403, 'admin token required');
+      res.json({ code: guiAuth.getSetupCode(), passwordSet: guiAuth.passwordSet });
+    });
+    api.put('/auth/password', need('admin'), async (req, res) => {
+      // With a GUI session the current password is required; with the admin
+      // token (smctl passwd) it's not, so a forgotten password can be reset.
+      if (req.session && !(await guiAuth.verify(req.body?.current))) return fail(res, 401, 'current password is wrong');
+      await guiAuth.setPassword(req.body?.password);
+      audit.add({ type: 'auth.password', by: req.session ? 'gui' : 'admin token', ip: ip(req) });
+      if (req.session) {
+        const { id, maxAge } = guiAuth.createSession();
+        setCookie(req, res, id, maxAge);
+      }
+      res.json({ ok: true });
+    });
+  }
 
   api.get('/secrets', (_req, res) => res.json({ secrets: store.list(), categories: store.categories() }));
 

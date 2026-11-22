@@ -19,6 +19,19 @@ Node >= 20, Linux (interactive mode uses util-linux `script`). The server uses E
 `sm-server` keeps the secrets (AES-256-GCM per value) and serves a web GUI.
 `sm` fetches values from it for every command; `smctl` and the GUI manage it.
 
+Run as a service that starts at boot (example unit, adjust paths):
+
+```ini
+# /etc/systemd/system/sm-server.service
+[Service]
+WorkingDirectory=/path/to/secret-manager
+ExecStart=/path/to/node server/index.js
+Environment=SM_LAN_BIND=192.168.1.10 SM_TLS_CERT=/path/server.crt SM_TLS_KEY=/path/server.key
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target
+```
+
 ```bash
 npm run server             # http://127.0.0.1:8737, data in .sm-server/
 smctl login                # same machine: reads .sm-server/tokens.json
@@ -26,6 +39,14 @@ smctl gui                  # prints/opens the GUI URL, already signed in
 smctl status
 ```
 
+- **GUI password**: on the first visit the GUI asks you to set one (at least 10
+  characters). It is stored only as a salted scrypt hash (`.sm-server/auth.json`,
+  0600). From another machine the first setup also needs a one-time code from
+  `smctl setup-code` (so nobody else on the LAN can claim the server first).
+  Signing in gives an HttpOnly, SameSite=Strict session cookie (12 h; a server
+  restart signs everyone out); changes made with it need an `X-SM-GUI` header
+  (CSRF guard); 5 wrong passwords from an IP start an increasing wait.
+  Change it in the GUI (Password), reset a forgotten one with `smctl passwd`.
 - **Admin token** (`sma_…`): add, replace, delete, view values, read the activity
   log. Used by the GUI and `smctl`. Viewing a value (GUI "Show") always needs
   this token, even with `SM_NO_AUTH=1`; each view is logged with the client IP,

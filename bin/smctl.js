@@ -3,6 +3,8 @@
 //   smctl login [--server URL] [--data DIR] [--token T --admin-token A] [--ca PEM] [--gui-url URL]
 //   smctl status
 //   smctl gui [URL] [--no-open]   print (and try to open) the GUI URL, signed in
+//   smctl setup-code          one-time code to set the first GUI password from another machine
+//   smctl passwd              set/reset the GUI password (admin token; new password on stdin or prompted)
 //   smctl set NAME [--note TEXT] [--category NAME]   value from stdin (never argv)
 //   smctl list                names only
 //   smctl rm NAME
@@ -108,6 +110,25 @@ async function main() {
       }
       return 0;
     }
+    case 'setup-code': {
+      const { code, passwordSet } = await backend.request('/auth/setup-code', { admin: true });
+      if (passwordSet) process.stdout.write('A GUI password is already set; use smctl passwd to change it.\n');
+      else process.stdout.write(`${code}\nEnter this code with your new password on the GUI's first page (needed only from another machine).\n`);
+      return 0;
+    }
+    case 'passwd': {
+      let pw;
+      if (process.stdin.isTTY) {
+        pw = await readValue('new GUI password');
+        const again = await readValue('repeat it');
+        if (pw !== again) return fail('the passwords differ');
+      } else {
+        pw = await readValue('password');
+      }
+      await backend.request('/auth/password', { method: 'PUT', body: { password: pw }, admin: true });
+      process.stderr.write('smctl: GUI password set; all GUI sessions were signed out\n');
+      return 0;
+    }
     case 'set': {
       const note = flag('--note');
       const category = flag('--category');
@@ -139,7 +160,7 @@ async function main() {
       for (const e of await backend.readAudit(Number(rest[0] || 20))) process.stdout.write(JSON.stringify(e) + '\n');
       return 0;
     default:
-      return fail('usage: smctl {login|logout|status|gui|set NAME|list [-l]|rm NAME|env|audit [N]}');
+      return fail('usage: smctl {login|logout|status|gui|setup-code|passwd|set NAME|list [-l]|rm NAME|env|audit [N]}');
   }
 }
 

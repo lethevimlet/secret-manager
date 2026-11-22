@@ -11,14 +11,33 @@
 <body>
   <!-- Sign in -->
   <main id="login" class="login" hidden>
-    <form id="login-form" class="card login-card">
+    <form id="login-form" class="card login-card" hidden>
       <div class="brand"><span class="logo" aria-hidden="true"></span><span>sm</span></div>
       <h1>Secret manager</h1>
-      <p class="muted">Paste the admin token. Run <code>smctl gui</code> to open this page signed in.</p>
-      <label for="token">Admin token</label>
-      <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="sma_…" required>
+      <p class="muted">Enter your password.</p>
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" required>
       <p id="login-error" class="error" role="alert" hidden></p>
       <button class="primary" type="submit">Sign in</button>
+      <p class="muted small-print">Forgot it? Reset it on the server with <code>smctl passwd</code>.</p>
+    </form>
+
+    <form id="setup-form" class="card login-card" hidden>
+      <div class="brand"><span class="logo" aria-hidden="true"></span><span>sm</span></div>
+      <h1>Set a password</h1>
+      <p class="muted">This server has no password yet. Choose one to protect the secret manager; it is stored only as a salted scrypt hash.</p>
+      <label for="setup-password">New password</label>
+      <input id="setup-password" type="password" autocomplete="new-password" required>
+      <small id="setup-hint" class="muted"></small>
+      <label for="setup-password2">Repeat it</label>
+      <input id="setup-password2" type="password" autocomplete="new-password" required>
+      <div id="setup-code-field" hidden>
+        <label for="setup-code">Setup code</label>
+        <input id="setup-code" autocomplete="off" spellcheck="false" placeholder="XXXXX-XXXXX">
+        <small class="muted">You're not on the server itself, so a one-time code is needed. Get it there with <code>smctl setup-code</code>.</small>
+      </div>
+      <p id="setup-error" class="error" role="alert" hidden></p>
+      <button class="primary" type="submit">Set password</button>
     </form>
   </main>
 
@@ -33,6 +52,7 @@
       <div class="topbar-right">
         <span id="status" class="status"><span class="dot"></span><span>connected</span></span>
         <span id="noauth" class="badge delete" title="Server started with SM_NO_AUTH=1: anyone who can reach it can manage secrets" hidden>sign-in disabled (testing)</span>
+        <button id="change-password" class="ghost">Password</button>
         <button id="logout" class="ghost">Sign out</button>
       </div>
     </header>
@@ -166,6 +186,24 @@
   </dialog>
 
   <datalist id="category-list"></datalist>
+
+  <dialog id="password-dialog">
+    <form method="dialog" id="password-form">
+      <h3>Change password</h3>
+      <p class="muted">Every other signed-in browser is signed out.</p>
+      <label for="pw-current">Current password</label>
+      <input id="pw-current" type="password" autocomplete="current-password" required>
+      <label for="pw-new">New password</label>
+      <input id="pw-new" type="password" autocomplete="new-password" required>
+      <label for="pw-new2">Repeat it</label>
+      <input id="pw-new2" type="password" autocomplete="new-password" required>
+      <p id="pw-error" class="error" role="alert" hidden></p>
+      <div class="actions">
+        <button type="button" class="ghost" data-close>Cancel</button>
+        <button class="primary" type="submit" value="ok">Change</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="token-dialog">
     <form method="dialog" id="token-form">

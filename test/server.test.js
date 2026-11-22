@@ -116,7 +116,7 @@ test('SM_NO_AUTH: manage without a token, values still need one', async () => {
   const srv = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
   const u = `http://127.0.0.1:${srv.address().port}/v1`;
   try {
-    assert.deepEqual(await fetch(u + '/whoami').then((r) => r.json()), { scope: 'admin', anonymous: true });
+    assert.deepEqual(await fetch(u + '/whoami').then((r) => r.json()), { scope: 'admin', anonymous: true, session: false });
     assert.equal((await fetch(u + '/secrets/OPEN', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: 'open-value-123' }) })).status, 201);
     assert.equal((await fetch(u + '/resolve', { method: 'POST' })).status, 401);
     assert.equal((await fetch(u + '/secrets', { headers: { Authorization: 'Bearer wrong' } })).status, 401);
@@ -218,4 +218,56 @@ test('sm-add: generate, pipe, refuses argv values and existing names; sm-ls list
   assert.ok(entries.some((e) => e.type === 'secret.create' && e.name === 'PIPED_ONE' && e.by === 'client'));
   await call('/secrets/GEN_ONE', { method: 'DELETE' });
   await call('/secrets/PIPED_ONE', { method: 'DELETE' });
+});
+
+test('GUI password: setup code off-loopback, scrypt hash, login, CSRF guard, lockout, reset', async () => {
+  const { GuiAuth, COOKIE } = await import('../server/auth.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sm-auth-'));
+  const t = loadTokens(dir).tokens;
+  const guiAuth = new GuiAuth(dir);
+  const app = createApp({ store: new SecretStore(dir), tokens: t, audit: new AuditLog(path.join(dir, 'audit.log')), guiAuth });
+  const srv = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+  const u = `http://127.0.0.1:${srv.address().port}/v1`;
+  const post = (p, body, headers = {}) => fetch(u + p, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-SM-GUI': '1', ...headers }, body: JSON.stringify(body) });
+  const cookieOf = (r) => /sm_session=([^;]+)/.exec(r.headers.get('set-cookie') || '')?.[1];
+  try {
+    assert.deepEqual(await fetch(u + '/auth/status').then((r) => r.json()), { passwordSet: false, loggedIn: false, setupNeedsCode: false, minPassword: 10 });
+    assert.equal((await fetch(u + '/secrets')).status, 401);
+    assert.equal((await post('/auth/setup', { password: 'short' })).status, 400);
+    // Not from loopback: the setup code is required (simulated by checking it directly).
+    const code = guiAuth.getSetupCode();
+    assert.ok(guiAuth.checkSetupCode(code.toLowerCase()) && !guiAuth.checkSetupCode('WRONG-CODE1'));
+    const setup = await post('/auth/setup', { password: 'correct horse battery' });
+    assert.equal(setup.status, 201);
+    assert.equal((await post('/auth/setup', { password: 'another password!' })).status, 409);
+    // Stored only as a scrypt hash.
+    const rec = fs.readFileSync(path.join(dir, 'auth.json'), 'utf8');
+    assert.ok(!rec.includes('correct horse') && JSON.parse(rec).scheme === 'scrypt');
+    assert.equal((fs.statSync(path.join(dir, 'auth.json')).mode & 0o777).toString(8), '600');
+    // Session from setup works; changes need the X-SM-GUI header.
+    const c1 = cookieOf(setup);
+    assert.match(setup.headers.get('set-cookie'), /HttpOnly/i);
+    assert.equal((await fetch(u + '/secrets', { headers: { Cookie: `${COOKIE}=${c1}` } })).status, 200);
+    assert.equal((await fetch(u + '/secrets/A', { method: 'PUT', headers: { Cookie: `${COOKIE}=${c1}`, 'Content-Type': 'application/json' }, body: '{"value":"abcdefgh12"}' })).status, 403);
+    assert.equal((await fetch(u + '/secrets/A', { method: 'PUT', headers: { Cookie: `${COOKIE}=${c1}`, 'Content-Type': 'application/json', 'X-SM-GUI': '1' }, body: '{"value":"abcdefgh12"}' })).status, 201);
+    // A session can view values.
+    assert.equal((await fetch(u + '/secrets/A/reveal', { method: 'POST', headers: { Cookie: `${COOKIE}=${c1}`, 'X-SM-GUI': '1' } }).then((r) => r.json())).value, 'abcdefgh12');
+    // Login, wrong password, lockout after 5.
+    assert.equal((await post('/auth/login', { password: 'correct horse battery' })).status, 200);
+    for (let i = 0; i < 5; i++) assert.equal((await post('/auth/login', { password: 'nope' })).status, 401);
+    assert.equal((await post('/auth/login', { password: 'correct horse battery' })).status, 429);
+    guiAuth.failures.clear();
+    // Logout ends the session.
+    await post('/auth/logout', {}, { Cookie: `${COOKIE}=${c1}` });
+    assert.equal((await fetch(u + '/secrets', { headers: { Cookie: `${COOKIE}=${c1}` } })).status, 401);
+    // Reset with the admin token (smctl passwd); old password stops working.
+    assert.equal((await fetch(u + '/auth/password', { method: 'PUT', headers: { Authorization: `Bearer ${t.admin}`, 'Content-Type': 'application/json' }, body: '{"password":"brand new password"}' })).status, 200);
+    assert.equal((await post('/auth/login', { password: 'correct horse battery' })).status, 401);
+    assert.equal((await post('/auth/login', { password: 'brand new password' })).status, 200);
+    // The client token can't read the setup code or change the password.
+    assert.equal((await fetch(u + '/auth/setup-code', { headers: { Authorization: `Bearer ${t.client}` } })).status, 403);
+  } finally {
+    srv.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

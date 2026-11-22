@@ -44,7 +44,7 @@ function toast(msg, bad = false) {
 async function api(path, opts = {}) {
   const res = await fetch('/v1' + path, {
     method: opts.method || 'GET',
-    headers: { ...((opts.token || token) ? { Authorization: `Bearer ${opts.token || token}` } : {}), ...(opts.body ? { 'Content-Type': 'application/json' } : {}) },
+    headers: { 'X-SM-GUI': '1', ...((opts.token || token) ? { Authorization: `Bearer ${opts.token || token}` } : {}), ...(opts.body ? { 'Content-Type': 'application/json' } : {}) },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   }).catch(() => {
     setStatus(false);
@@ -52,7 +52,7 @@ async function api(path, opts = {}) {
   });
   setStatus(true);
   if (res.status === 401 && !opts.token && !opts.probe) {
-    signOut('Session expired, sign in again.');
+    showLogin('Your session ended, sign in again.');
     throw new Error('unauthorized');
   }
   if (res.status === 204) return null;
@@ -74,39 +74,96 @@ function showError(id, msg) {
 }
 
 // ---------- auth ----------
-async function signIn(candidate) {
-  const who = await api('/whoami', { token: candidate });
-  if (who.scope !== 'admin') throw new Error('That is the client token. The GUI needs the admin token.');
-  token = candidate;
-  try { sessionStorage.setItem(KEY, token); } catch {}
-  showOpenMode(false);
+function enterApp({ openMode = false } = {}) {
   $('#login').hidden = true;
   $('#app').hidden = false;
+  showOpenMode(openMode);
+  $('#change-password').hidden = openMode || Boolean(token);
   switchTab(location.hash === '#activity' ? 'activity' : 'secrets');
 }
 
-function signOut(message) {
+// Show the password form, or the first-time setup form.
+async function showLogin(message) {
   hideAllValues();
-  token = null;
-  try { sessionStorage.removeItem(KEY); } catch {}
   clearInterval(timer);
   $('#app').hidden = true;
   $('#login').hidden = false;
-  showError('#login-error', message);
-  $('#token').value = '';
-  $('#token').focus();
+  let st = { passwordSet: true, setupNeedsCode: false, minPassword: 10 };
+  try { st = await api('/auth/status', { probe: true }); } catch {}
+  $('#login-form').hidden = !st.passwordSet;
+  $('#setup-form').hidden = st.passwordSet;
+  if (st.passwordSet) {
+    showError('#login-error', message);
+    $('#password').value = '';
+    $('#password').focus();
+  } else {
+    $('#setup-code-field').hidden = !st.setupNeedsCode;
+    $('#setup-code').required = st.setupNeedsCode;
+    $('#setup-hint').textContent = `At least ${st.minPassword} characters.`;
+    $('#setup-password').focus();
+  }
 }
 
 $('#login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   showError('#login-error');
+  const btn = e.submitter;
+  btn.disabled = true;
   try {
-    await signIn($('#token').value.trim());
+    await api('/auth/login', { method: 'POST', body: { password: $('#password').value }, probe: true });
+    $('#password').value = '';
+    enterApp();
   } catch (err) {
-    showError('#login-error', err.message === 'missing or invalid token' ? 'That token is not valid for this server.' : err.message);
+    showError('#login-error', err.message);
+    $('#password').select();
+  } finally {
+    btn.disabled = false;
   }
 });
+
+$('#setup-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  showError('#setup-error');
+  if ($('#setup-password').value !== $('#setup-password2').value) return showError('#setup-error', 'The two passwords differ.');
+  try {
+    await api('/auth/setup', { method: 'POST', body: { password: $('#setup-password').value, code: $('#setup-code').value }, probe: true });
+    $('#setup-form').reset();
+    toast('Password set');
+    enterApp();
+  } catch (err) {
+    showError('#setup-error', err.message);
+  }
+});
+
+async function signOut() {
+  hideAllValues();
+  token = null;
+  try { sessionStorage.removeItem(KEY); } catch {}
+  try { await api('/auth/logout', { method: 'POST', probe: true }); } catch {}
+  showLogin();
+}
 $('#logout').addEventListener('click', () => signOut());
+
+// Change password
+const passwordDialog = $('#password-dialog');
+$('#change-password').addEventListener('click', () => {
+  $('#password-form').reset();
+  showError('#pw-error');
+  passwordDialog.showModal();
+  $('#pw-current').focus();
+});
+$('#password-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if ($('#pw-new').value !== $('#pw-new2').value) return showError('#pw-error', 'The two new passwords differ.');
+  try {
+    await api('/auth/password', { method: 'PUT', body: { current: $('#pw-current').value, password: $('#pw-new').value }, probe: true });
+    passwordDialog.close();
+    toast('Password changed');
+  } catch (err) {
+    showError('#pw-error', err.message);
+  }
+});
+passwordDialog.addEventListener('close', () => $('#password-form').reset());
 
 // ---------- tabs ----------
 function switchTab(name) {
@@ -478,6 +535,11 @@ function describe(e) {
     case 'secret.edit': return [el('span', { class: 'badge' }, 'details edited'), el('code', {}, e.name), e.category !== undefined ? el('span', { class: 'muted' }, ` → ${e.category || 'Uncategorized'}`) : null];
     case 'secret.delete': return [el('span', { class: 'badge delete' }, 'deleted'), el('code', {}, e.name)];
     case 'secret.reveal': return [el('span', { class: 'badge change' }, 'value viewed'), el('code', {}, e.name), e.ip ? el('span', { class: 'muted' }, ` from ${e.ip.replace(/^::ffff:/, '')}`) : null];
+    case 'auth.login': return [el('span', { class: 'badge' }, 'signed in'), el('span', { class: 'muted' }, `GUI from ${e.ip}`)];
+    case 'auth.login-failed': return [el('span', { class: 'badge delete' }, 'wrong password'), el('span', { class: 'muted' }, `GUI from ${e.ip}`)];
+    case 'auth.setup': return [el('span', { class: 'badge change' }, 'password set'), el('span', { class: 'muted' }, `first-time setup from ${e.ip}`)];
+    case 'auth.setup-failed': return [el('span', { class: 'badge delete' }, 'setup refused'), el('span', { class: 'muted' }, `wrong setup code from ${e.ip}`)];
+    case 'auth.password': return [el('span', { class: 'badge change' }, 'password changed'), el('span', { class: 'muted' }, `with the ${e.by} from ${e.ip}`)];
     case 'resolve': return [el('span', { class: 'badge' }, 'values fetched'), el('span', { class: 'muted' }, `${e.count} secret${e.count === 1 ? '' : 's'} by ${e.by}`)];
     default: return [el('span', { class: 'badge' }, e.type)];
   }
@@ -527,18 +589,7 @@ function showOpenMode(on) {
 
 // ---------- start ----------
 (async () => {
-  // Server running with SM_NO_AUTH=1 (testing): no sign-in.
-  try {
-    const who = await api('/whoami', { probe: true });
-    if (who.anonymous) {
-      token = null;
-      $('#login').hidden = true;
-      $('#app').hidden = false;
-      showOpenMode(true);
-      switchTab(location.hash === '#activity' ? 'activity' : 'secrets');
-      return;
-    }
-  } catch {}
+  // `smctl gui` passes the admin token in the URL fragment (never sent to the server).
   const fromHash = /(?:^#|&)token=([^&]+)/.exec(location.hash);
   if (fromHash) history.replaceState(null, '', location.pathname);
   let saved = null;
@@ -546,12 +597,19 @@ function showOpenMode(on) {
   const candidate = fromHash ? decodeURIComponent(fromHash[1]) : saved;
   if (candidate) {
     try {
-      await signIn(candidate);
-      return;
-    } catch (err) {
-      showError('#login-error', err.message === 'missing or invalid token' ? 'Saved token is no longer valid.' : err.message);
-    }
+      const who = await api('/whoami', { token: candidate });
+      if (who.scope === 'admin') {
+        token = candidate;
+        try { sessionStorage.setItem(KEY, token); } catch {}
+        return enterApp();
+      }
+    } catch {}
+    try { sessionStorage.removeItem(KEY); } catch {}
   }
-  $('#login').hidden = false;
-  $('#token').focus();
+  // Signed-in session cookie, or a server started with SM_NO_AUTH=1.
+  try {
+    const who = await api('/whoami', { probe: true });
+    return enterApp({ openMode: who.anonymous });
+  } catch {}
+  showLogin();
 })();

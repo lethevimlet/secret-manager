@@ -16,6 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SecretStore } from './store.js';
 import { createApp, AuditLog } from './app.js';
+import { GuiAuth } from './auth.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const DEFAULT_DATA = path.join(ROOT, '.sm-server');
@@ -44,7 +45,9 @@ if (isMain) {
   const store = new SecretStore(dir);
   const { tokens, created } = loadTokens(dir);
   const noAuth = process.env.SM_NO_AUTH === '1';
-  const app = createApp({ store, tokens, audit: new AuditLog(path.join(dir, 'audit.log'), { days: Number(process.env.SM_AUDIT_DAYS ?? 30), max: Number(process.env.SM_AUDIT_MAX ?? 10000) }), noAuth });
+  const guiAuth = new GuiAuth(dir);
+  if (!guiAuth.passwordSet) console.log('GUI: no password yet; set it on first visit (from another machine: smctl setup-code)');
+  const app = createApp({ store, tokens, audit: new AuditLog(path.join(dir, 'audit.log'), { days: Number(process.env.SM_AUDIT_DAYS ?? 30), max: Number(process.env.SM_AUDIT_MAX ?? 10000) }), noAuth, guiAuth });
   if (noAuth) console.warn('WARNING: SM_NO_AUTH=1, anyone who can reach the server can add, replace and delete secrets');
 
   // Listener 1: plain HTTP on loopback, for sm/smctl on this machine.

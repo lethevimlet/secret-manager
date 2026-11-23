@@ -118,3 +118,10 @@ test('git-credential-sm: answers only with the token in the environment of an sm
   const viaSm = sm(['-c', `printf 'protocol=https\\nhost=github.com\\n\\n' | GITHUB_TOKEN="$API_KEY" node ${helper} get`]);
   assert.equal(viaSm.stdout, 'username=x-access-token\npassword=[BLOCKED:API_KEY]\n');
 });
+
+test('a stored secret replaces an inherited variable of the same name (stale token)', () => {
+  const r = sm(['-c', '[ "$API_KEY" = sk-test-abcdef123456 ] && echo store-wins'], { API_KEY: 'old-revoked-token' });
+  assert.equal(r.stdout, 'store-wins\n');
+  const off = sm(['-c', 'echo "$API_KEY"'], { API_KEY: 'kept-when-auto-env-off', SM_AUTO_ENV: '0' });
+  assert.equal(off.stdout, 'kept-when-auto-env-off\n');
+});

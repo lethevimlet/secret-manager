@@ -69,7 +69,9 @@ export async function runShell(args) {
   const env = {};
   for (const [k, v] of Object.entries(process.env)) env[k] = substitute(v, secrets, used);
   if (process.env.SM_AUTO_ENV !== '0') {
-    for (const [name, value] of Object.entries(secrets)) if (!(name in env)) env[name] = value;
+    // The store is authoritative: a stored secret replaces an inherited variable
+    // of the same name (e.g. a stale token still exported in an old shell).
+    for (const [name, value] of Object.entries(secrets)) env[name] = value;
   }
 
   const outArgs = args.map((a, idx) => {

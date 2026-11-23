@@ -150,7 +150,8 @@ sm                          # interactive shell, prompt tagged with a red "sm"
 
 Inside `sm`:
 
-- **Every secret is an environment variable with its own name.** Write
+- **Every secret is an environment variable with its own name**, replacing any
+  variable of that name the shell already had. Write
   `$NAME` in the command. Use **single quotes** around `-c '…'` so `$NAME` is
   expanded inside sm (where it exists), not by your current shell (where it's
   empty).
@@ -423,7 +424,7 @@ what is and isn't caught.
 | `SM_CONFIG` | Config file (default `~/.config/sm/config.json`, written by `smctl login`). |
 | `SM_SERVER`, `SM_TOKEN`, `SM_ADMIN_TOKEN` | Override server URL and tokens. |
 | `SM_BACKEND=file` | Use the local file store (`.sm/`) instead of a server. |
-| `SM_AUTO_ENV=0` | Don't export secrets as `$NAME` (placeholders only). |
+| `SM_AUTO_ENV=0` | Don't export secrets as `$NAME` (only placeholders in env/command are resolved). |
 | `SM_PROMPT` | Prompt tag of interactive shells (`SM_PROMPT=` turns it off). |
 | `SM_AUDIT=0` | Don't report commands to Activity. |
 | `SM_GIT_SECRET` | Secret name `git-credential-sm` uses (default `GITHUB_TOKEN`). |

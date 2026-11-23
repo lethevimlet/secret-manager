@@ -16,7 +16,7 @@ in the agent's context**.
 ```console
 $ sm -c 'curl -s -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user | head -3'
 {
-  "login": "lethevimlet",
+  "login": "you",
 $ sm -c 'echo "$GITHUB_TOKEN"'
 [BLOCKED:GITHUB_TOKEN]
 ```
@@ -593,3 +593,9 @@ npm run server  # run the server in the foreground
 | `server/` | API (`app.js`), encrypted store, GUI sign-in (`auth.js`), web GUI (`public/`). |
 | `skills/` | Agent skill and global instructions. |
 | `installer.sh` | Installer. |
+
+---
+
+## License
+
+[MIT](LICENSE)

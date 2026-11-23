@@ -1,0 +1,37 @@
+name: Publish to npm
+
+# Publishes when the version in package.json is not on npm yet.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+      - name: Version
+        id: v
+        run: |
+          v=$(node -p 'require("./package.json").version')
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if npm view "@lethevimlet/secret-manager@$v" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"; echo "$v is already on npm, nothing to publish"
+          else echo "exists=false" >> "$GITHUB_OUTPUT"; fi
+      - run: npm ci --no-audit --no-fund
+        if: steps.v.outputs.exists == 'false'
+      - run: npm test
+        if: steps.v.outputs.exists == 'false'
+      - run: npm publish --provenance --access public
+        if: steps.v.outputs.exists == 'false'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

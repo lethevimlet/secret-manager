@@ -507,8 +507,9 @@ function renderSecrets() {
     const closed = collapsed.has(key) && !q;
     if (grouped) {
       rows.push(el('tr', { class: 'group' + (closed ? ' collapsed' : '') },
-        el('td', { colspan: '6' },
+        el('td', { colspan: '6' }, el('div', { class: 'group-head' },
           el('button', {
+            class: 'group-toggle',
             'aria-expanded': String(!closed),
             onclick: () => { collapsed.has(key) ? collapsed.delete(key) : collapsed.add(key); store('sm.collapsed', JSON.stringify([...collapsed])); renderSecrets(); },
           },
@@ -516,7 +517,11 @@ function renderSecrets() {
             key === UNCAT ? el('span', { class: 'uncat' }, 'Uncategorized') : highlight(key, q),
             el('span', { class: 'n' }, String(list.length)),
           ),
-        ),
+          key === UNCAT ? null : el('span', { class: 'cat-actions' },
+            el('button', { class: 'link', title: `Rename the category ${key}`, onclick: () => openCategory(key, 'rename') }, 'Rename'),
+            el('button', { class: 'link danger-text', title: `Delete the category ${key} (its secrets become Uncategorized)`, onclick: () => openCategory(key, 'delete') }, 'Delete'),
+          ),
+        )),
       ));
     }
     if (!closed) for (const s of list) rows.push(secretRow(s, q), ...(revealed.has(sid(s)) ? [revealRow(s)] : []));
@@ -582,6 +587,52 @@ $('#edit-form').addEventListener('submit', async (e) => {
     loadSecrets();
   } catch (err) {
     showError('#edit-error', err.message);
+  }
+});
+
+// Rename / delete a category in the scope being viewed. Deleting only clears
+// the category: its secrets move to Uncategorized.
+const categoryDialog = $('#category-dialog');
+let categoryTarget = null;
+function openCategory(name, mode) {
+  categoryTarget = { name, mode, scope: activeScope };
+  const n = inScope().filter((s) => s.category === name).length;
+  const count = `${n} secret${n === 1 ? '' : 's'}`;
+  $('#category-form').reset();
+  showError('#cat-error');
+  $('#cat-title').textContent = mode === 'rename' ? `Rename the category ${name}` : `Delete the category ${name}?`;
+  $('#cat-rename').hidden = mode !== 'rename';
+  $('#cat-delete').hidden = mode === 'rename';
+  for (const id of ['#cat-count', '#cat-count2']) $(id).textContent = count;
+  for (const id of ['#cat-scope', '#cat-scope2']) $(id).textContent = scopeLabel(activeScope);
+  $('#cat-submit').textContent = mode === 'rename' ? 'Rename' : 'Delete category';
+  $('#cat-submit').className = mode === 'rename' ? 'primary' : 'danger';
+  $('#cat-name').value = name;
+  categoryDialog.showModal();
+  if (mode === 'rename') { $('#cat-name').focus(); $('#cat-name').select(); } else $('#category-form .ghost').focus();
+}
+$('#category-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const { name, mode, scope } = categoryTarget;
+  const q = scope ? `?scope=${encodeURIComponent(scope)}` : '';
+  try {
+    if (mode === 'rename') {
+      const to = $('#cat-name').value.trim().replace(/\s+/g, ' ');
+      if (!to) return showError('#cat-error', 'Enter a name (to remove the category, use Delete).');
+      if (to === name) return categoryDialog.close();
+      await api(`/categories/rename${q}`, { method: 'POST', body: { from: name, to } });
+      if (collapsed.delete(name)) { collapsed.add(to); store('sm.collapsed', JSON.stringify([...collapsed])); }
+      if (activeCategory === name) { activeCategory = to; store('sm.category', to); }
+      toast(`Category ${name} renamed to ${to}`);
+    } else {
+      const r = await api(`/categories/delete${q}`, { method: 'POST', body: { name } });
+      if (activeCategory === name) { activeCategory = null; store('sm.category', null); }
+      toast(`Category ${name} deleted; ${r.names.length} secret${r.names.length === 1 ? '' : 's'} now Uncategorized`);
+    }
+    categoryDialog.close();
+    loadSecrets();
+  } catch (err) {
+    showError('#cat-error', err.message);
   }
 });
 
@@ -750,8 +801,10 @@ function describe(e) {
       return [el('span', { class: 'badge command' }, e.mode === 'interactive' ? 'shell session' : 'command'),
         e.scopes?.length ? el('span', { class: 'scope-tag', title: 'Scopes this shell used' }, `-s ${e.scopes.join(',')}`) : null,
         e.mode === 'interactive' && (!e.command || e.command === '[]') ? el('span', { class: 'muted' }, 'interactive shell') : el('code', {}, e.command),
-        e.cwd ? el('div', { class: 'muted' }, e.cwd) : null];
+        e.cwd ? el('div', { class: 'muted' }, e.cwd + (e.used?.length ? ` · used ${e.used.join(', ')}` : '')) : e.used?.length ? el('div', { class: 'muted' }, `used ${e.used.join(', ')}`) : null];
     case 'scope.delete': return [el('span', { class: 'badge delete' }, 'scope deleted'), el('span', { class: 'scope-tag' }, e.scope), el('span', { class: 'muted' }, e.names?.length ? ` ${e.names.length} deleted: ${e.names.join(', ')}` : ' empty')];
+    case 'category.rename': return [el('span', { class: 'badge change' }, 'category renamed'), sc(e), el('span', { class: 'muted' }, ` ${e.from} → ${e.to} (${e.names?.length || 0})`)];
+    case 'category.delete': return [el('span', { class: 'badge change' }, 'category deleted'), sc(e), el('span', { class: 'muted' }, ` ${e.category}: ${e.names?.length || 0} now Uncategorized`)];
     case 'secret.move': return [el('span', { class: 'badge change' }, 'moved'), el('code', {}, e.name), el('span', { class: 'muted' }, ` ${scopeLabel(e.from)} → ${scopeLabel(e.to)}`)];
     case 'secret.create': return [el('span', { class: 'badge change' }, 'created'), el('code', {}, e.name), sc(e), e.by === 'client' ? el('span', { class: 'muted' }, ' by an agent (sm-add)') : null];
     case 'secret.update': return [el('span', { class: 'badge change' }, 'value replaced'), el('code', {}, e.name), sc(e)];

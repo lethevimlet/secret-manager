@@ -9,6 +9,8 @@
 //     terminal through util-linux `script`, so line editing and prompts work.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getSecrets, recordAudit } from './backend.js';
 import { substitute, findNames } from './placeholders.js';
@@ -90,6 +92,36 @@ export function splitScopeArgs(args) {
   return { scopes: [...new Set(scopes)], given, rest: args.slice(i) };
 }
 
+// Secret names a command refers to as $NAME / ${NAME} (only known names).
+export function referencedNames(command, secrets) {
+  const out = new Set();
+  for (const m of String(command).matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)) if (m[1] in secrets) out.add(m[1]);
+  return out;
+}
+
+// A file where helpers running inside sm (git-credential-sm) note the secrets
+// they handed out, so they count as used. Read and removed when sm exits.
+function usageFile() {
+  try {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sm-usage-'));
+    const f = path.join(dir, 'used');
+    fs.writeFileSync(f, '', { mode: 0o600 });
+    return f;
+  } catch {
+    return null;
+  }
+}
+function readUsage(f) {
+  if (!f) return [];
+  try {
+    return fs.readFileSync(f, 'utf8').split('\n').map((l) => l.trim()).filter(Boolean);
+  } catch {
+    return [];
+  } finally {
+    fs.rmSync(path.dirname(f), { recursive: true, force: true });
+  }
+}
+
 export async function runShell(rawArgs) {
   const parsed = splitScopeArgs(rawArgs);
   const args = parsed.rest;
@@ -131,6 +163,9 @@ export async function runShell(rawArgs) {
   });
 
   env.SM_ACTIVE = '1'; // lets scripts and prompts detect they run inside sm
+  const usage = process.env.SM_AUDIT !== '0' ? usageFile() : null;
+  if (usage) env.SM_USAGE_FILE = usage;
+  else delete env.SM_USAGE_FILE;
   if (scopes.length) env.SM_SCOPES = scopes.join(','); // prompt tag sm[...] and nested sm
   else delete env.SM_SCOPES;
   // Every variable that now holds a secret value, so agents started inside sm
@@ -183,11 +218,18 @@ export async function runShell(rawArgs) {
       }
       for (const [sig, h] of Object.entries(handlers)) process.off(sig, h);
       if (process.env.SM_AUDIT !== '0') {
+        // What counts as a use: placeholders, $NAME in the -c command, and
+        // secrets helpers report (git). Not: whatever a program reads from
+        // its environment by itself; sm can't see that.
+        const usedNames = new Set(used);
+        if (commandIndex >= 0) for (const n of referencedNames(args[commandIndex], secrets)) usedNames.add(n);
+        for (const n of readUsage(usage)) if (n in secrets) usedNames.add(n);
         await recordAudit({
           mode: interactive ? 'interactive' : hasC ? 'command' : 'script',
           ...(scopes.length && { scopes }),
           command: commandIndex >= 0 ? args[commandIndex] : args.join(' '), // as written: placeholders only
           placeholders: [...used],
+          used: [...usedNames],
           envPlaceholders: [...new Set(Object.values(process.env).flatMap(findNames))],
           redactions: redactor.counts,
           exit: code,

@@ -1,7 +1,7 @@
 {
-  "name": "sm-proto",
-  "version": "0.1.0",
-  "description": "Prototype: bash-compatible shell that substitutes secret placeholders and redacts output",
+  "name": "@lethevimlet/secret-manager",
+  "version": "0.0.1",
+  "description": "sm: a bash-compatible shell that hands secrets to commands by name and blocks them from the output, with a server, GUI and coding-agent skill",
   "type": "module",
   "bin": {
     "sm": "bin/sm.js",
@@ -9,8 +9,19 @@
     "sm-server": "server/index.js",
     "sm-ls": "bin/sm-ls.js",
     "sm-add": "bin/sm-add.js",
-    "git-credential-sm": "bin/git-credential-sm.js"
+    "git-credential-sm": "bin/git-credential-sm.js",
+    "sm-setup": "installer.sh"
   },
+  "files": [
+    "bin/",
+    "src/",
+    "server/",
+    "skills/",
+    "installer.sh",
+    "install.sh",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "server": "node server/index.js",
     "test": "node --test",
@@ -20,7 +31,31 @@
     "node": ">=20"
   },
   "license": "MIT",
-  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lethevimlet/secret-manager.git"
+  },
+  "homepage": "https://github.com/lethevimlet/secret-manager#readme",
+  "bugs": {
+    "url": "https://github.com/lethevimlet/secret-manager/issues"
+  },
+  "keywords": [
+    "secrets",
+    "secret-manager",
+    "shell",
+    "redaction",
+    "claude-code",
+    "opencode",
+    "ai-agents"
+  ],
+  "os": [
+    "linux",
+    "darwin"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "dependencies": {
     "express": "^5.3.0"
   }

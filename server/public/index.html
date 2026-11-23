@@ -126,7 +126,7 @@
         <div id="categories" class="chips" role="tablist" aria-label="Categories"></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Name</th><th>Note</th><th>Updated</th><th>Last used</th><th class="num">Uses</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Note</th><th>Updated</th><th title="When a command last used it: $NAME or {{secret:NAME}} in an sm -c command, or git through git-credential-sm">Last used</th><th class="num" title="How many sm commands used it">Uses</th><th></th></tr></thead>
             <tbody id="secrets-body"></tbody>
           </table>
         </div>
@@ -376,6 +376,25 @@
       <div class="actions">
         <button type="button" class="ghost" data-close>Cancel</button>
         <button class="danger" type="submit" value="ok">Delete</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="category-dialog">
+    <form method="dialog" id="category-form">
+      <h3 id="cat-title"></h3>
+      <div id="cat-rename">
+        <p class="muted">Renames it for <span id="cat-count"></span> in <span id="cat-scope"></span>. A name that already exists merges the two.</p>
+        <label for="cat-name">New name</label>
+        <input id="cat-name" list="category-list" maxlength="40" autocomplete="off">
+      </div>
+      <div id="cat-delete">
+        <p>Its <span id="cat-count2"></span> in <span id="cat-scope2"></span> move to <strong>Uncategorized</strong>. No secret is deleted.</p>
+      </div>
+      <p id="cat-error" class="error" role="alert" hidden></p>
+      <div class="actions">
+        <button type="button" class="ghost" data-close>Cancel</button>
+        <button id="cat-submit" class="primary" type="submit" value="ok"></button>
       </div>
     </form>
   </dialog>

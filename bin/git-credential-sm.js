@@ -10,6 +10,8 @@
 // doesn't exist, so it answers nothing and tells git to stop (quit=1):
 // `git push` then fails with a hint to run it as `sm -c 'git push'`. It never
 // asks the sm server itself, so setting SM_ACTIVE=1 by hand gets nothing.
+import fs from 'node:fs';
+
 const HOSTS = {
   'github.com': 'GITHUB_TOKEN',
   'gist.github.com': 'GITHUB_TOKEN',
@@ -37,4 +39,8 @@ process.stdin.on('end', () => {
     return;
   }
   process.stdout.write(`username=x-access-token\npassword=${token}\n`);
+  // Tell sm the secret was used (counts in "Last used" / "Uses").
+  if (process.env.SM_USAGE_FILE) {
+    try { fs.appendFileSync(process.env.SM_USAGE_FILE, name + '\n'); } catch {}
+  }
 });

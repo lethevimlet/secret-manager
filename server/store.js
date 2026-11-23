@@ -194,6 +194,24 @@ export class SecretStore {
     return true;
   }
 
+  // Rename a category in one scope (to = '' deletes it: its secrets become
+  // uncategorized). Renaming onto an existing category merges the two.
+  // Returns the names of the secrets that changed.
+  renameCategory(from, to, scope = DEFAULT_SCOPE) {
+    scope = cleanScope(scope);
+    from = cleanCategory(from) || '';
+    to = cleanCategory(to) || '';
+    if (!from) throw Object.assign(new Error('category required'), { status: 400 });
+    if (from === to) return [];
+    const now = new Date().toISOString();
+    const keys = Object.keys(this.data).filter((k) => splitKey(k).scope === scope && (this.data[k].category || '') === from);
+    for (const k of keys) Object.assign(this.data[k], { category: to, changedAt: now, changedBy: this.device });
+    if (!keys.length) return [];
+    this.save();
+    for (const k of keys) this.changed(k);
+    return keys.map((k) => splitKey(k).name).sort();
+  }
+
   categories() {
     return [...new Set(Object.values(this.data).map((s) => s.category || ''))].filter(Boolean).sort((a, b) => a.localeCompare(b));
   }
@@ -287,7 +305,8 @@ export class SecretStore {
     return Object.hasOwn(this.data, key) ? this.decrypt(key, this.data[key]) : null;
   }
 
-  // The values of the given scopes, for the sm shell; marks them as used.
+  // The values of the given scopes, for the sm shell. Fetching is not a use:
+  // sm reports the names a command actually used afterwards (markUsed).
   // A name in several scopes takes the value of the last scope listed
   // (reported in `overridden`). `empty` = requested scopes with no secrets.
   resolve(scopes = [DEFAULT_SCOPE]) {
@@ -295,7 +314,6 @@ export class SecretStore {
     const secrets = Object.create(null);
     const from = new Map(); // name -> scope it came from
     const overridden = [];
-    const now = new Date().toISOString();
     for (const scope of list) {
       for (const [key, s] of Object.entries(this.data)) {
         const k = splitKey(key);
@@ -303,13 +321,29 @@ export class SecretStore {
         if (from.has(k.name)) overridden.push({ name: k.name, scope: from.get(k.name), by: scope });
         secrets[k.name] = this.decrypt(key, s);
         from.set(k.name, scope);
-        s.lastUsedAt = now;
-        s.uses = (s.uses || 0) + 1;
       }
     }
-    if (Object.keys(secrets).length) this.save();
     const used = new Set(from.values());
     return { secrets, scopes: list, overridden, empty: list.filter((s) => !used.has(s)) };
+  }
+
+  // Counts a use of each name, in the scope its value came from when sm
+  // fetched `scopes` (the last listed scope holding the name wins, as in
+  // resolve). Unknown names are ignored. Returns the names counted.
+  markUsed(names, scopes = [DEFAULT_SCOPE]) {
+    const list = [...new Set(scopes.map(cleanScope))].reverse();
+    const now = new Date().toISOString();
+    const counted = [];
+    for (const name of new Set(names)) {
+      const scope = list.find((sc) => Object.hasOwn(this.data, keyOf(name, sc)));
+      if (scope === undefined) continue;
+      const s = this.data[keyOf(name, scope)];
+      s.lastUsedAt = now;
+      s.uses = (s.uses || 0) + 1;
+      counted.push(name);
+    }
+    if (counted.length) this.save();
+    return counted;
   }
 
   // All scopes at once (the old behaviour; only for tests and tools).

@@ -30,7 +30,7 @@ verbose `curl`, a config file or a log read into the agent's context. It does
 not stop an agent that deliberately tries to extract a value (see
 [Security model](#security-model)).
 
-Requirements: Linux, Node.js 20+, bash, util-linux `script` (interactive shell),
+Requirements: Linux, Node.js 20+ (the one-line installer installs it with nvm), bash, util-linux `script` (interactive shell),
 `openssl` only if the installer should generate certificates.
 
 ---
@@ -56,9 +56,20 @@ Requirements: Linux, Node.js 20+, bash, util-linux `script` (interactive shell),
 ## Quick start
 
 ```bash
-git clone https://github.com/lethevimlet/secret-manager && cd secret-manager
-./installer.sh                 # answer "y" to run the server on this machine
+curl -fsSL https://raw.githubusercontent.com/lethevimlet/secret-manager/main/install.sh | bash
 ```
+
+Answer "y" to run the server on this machine. The script installs Node.js with
+[nvm](https://github.com/nvm-sh/nvm) if needed (Node 20+), the npm package
+[`@lethevimlet/secret-manager`](https://www.npmjs.com/package/@lethevimlet/secret-manager),
+then runs its installer. Installer options go after `bash -s --`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lethevimlet/secret-manager/main/install.sh | bash -s -- --client --server-url https://192.168.1.10:8737 --code ABCD-EFGH
+```
+
+Already have Node 20+? `npm i -g @lethevimlet/secret-manager && sm-setup` does
+the same. Run either again to update.
 
 Then:
 
@@ -81,34 +92,41 @@ Then:
 ## Installer
 
 ```bash
-./installer.sh            # interactive
+sm-setup                  # interactive (after npm i -g); from a git clone: ./installer.sh
 ```
 
 What it does, in order:
 
-1. **Commands.** Checks Node 20+, runs `npm ci` if needed, and installs `sm`,
+1. **Commands.** Checks Node 20+ (offers to install the LTS with nvm), runs
+   `npm ci` in a git clone if needed, and installs `sm`,
    `smctl`, `sm-ls`, `sm-add`, `sm-server` and `git-credential-sm` into
    `/usr/local/bin` (as root) or `~/.local/bin`. They're small wrappers with
    the absolute `node` path, so they also work in systemd units and in shells
-   where `node` isn't on the `PATH` (nvm).
+   where `node` isn't on the `PATH` (nvm). If that folder isn't on your `PATH`,
+   it adds an `export PATH=…  # sm` line to `~/.bashrc` (and `~/.zshrc` /
+   `~/.profile` if they exist).
 2. **"Run the sm server on THIS machine?"**
    - **Yes → server mode.** Asks whether to also serve the GUI on your network
      over HTTPS. For that it needs an IP address and either your own
      certificate (cert, key and optionally the CA that signed it) or it
-     **generates a local CA and a certificate** (in `.sm-server/tls/`). It then
+     **generates a local CA and a certificate** (in the data folder, `tls/`). It then
      writes a systemd unit **enabled at boot** (`/etc/systemd/system/sm-server.service`
      as root; a user unit otherwise, plus `loginctl enable-linger`), starts it,
      waits until it answers and logs the CLI in. An existing unit is backed up
      first.
    - **No → client mode.** Asks for the URL of an existing server and a
      **pairing code** (see [other machines](#using-the-server-from-other-machines)).
-3. **Agent skill** for Claude Code and opencode (symlinks into
-   `~/.claude/skills` and `~/.config/opencode/skills`), and optionally the
-   start-of-conversation announcement in `~/.claude/CLAUDE.md` and
-   `~/.config/opencode/AGENTS.md`.
+3. **Coding agents** (Claude Code, opencode; those found, else both). One question:
+   - **full** (default): the skill (symlinks into `~/.claude/skills` and
+     `~/.config/opencode/skills`) **plus** the global instructions in
+     `~/.claude/CLAUDE.md` and `~/.config/opencode/AGENTS.md`, so agents use sm
+     from the first message and announce it;
+   - **skill**: only the skill (agents load it when a task needs a secret);
+   - **none**.
 4. **GitHub**: let git get the token from sm (see [GitHub](#github-git-and-gh)).
 
-It's safe to run again (e.g. after `git pull`, or to change the LAN address).
+It's safe to run again (after an update, or to change the LAN address). A
+re-install keeps the data folder of the existing systemd unit.
 
 ### Installer options
 
@@ -125,7 +143,10 @@ It's safe to run again (e.g. after `git pull`, or to change the LAN address).
 | `--server-url URL --code CODE` | Server to pair with and the code from `smctl pair`. |
 | `--ca-fingerprint FP` | Expected CA fingerprint (needed when not interactive). |
 | `--bin DIR` | Where to put the commands. |
-| `--no-skill`, `--no-git` | Skip those steps. |
+| `--agents full\|skill\|none` | Coding-agent setup without asking (`--no-skill` = `none`). |
+| `--no-git` | Skip the git step. |
+| `--no-node` | Never install Node.js with nvm. |
+| `--no-path` | Don't add the commands' folder to `PATH` in shell rc files. |
 | `--yes`, `-y` | Accept defaults, ask nothing. |
 
 Examples:
@@ -263,8 +284,17 @@ Open the server's address in a browser (`smctl gui` prints it, signed in).
     being viewed. See [Scopes](#scopes).
   - **Categories** split the list into sections and show as filter chips;
     **search** covers name, category and note (press `/`).
+  - **Rename** or **Delete** a category from its section header (in the scope
+    being viewed). Deleting moves its secrets to Uncategorized; none is deleted.
+  - **Last used / Uses** count the commands that actually used a secret:
+    `$NAME`, `${NAME}` or `{{secret:NAME}}` in an `sm -c` command, a
+    placeholder in an inherited variable, or git getting `GITHUB_TOKEN` from
+    `git-credential-sm`. Merely starting `sm` (which fetches every secret of
+    its scopes) doesn't count, and neither does a program reading a variable
+    by itself (`sm -c 'npm publish'`, scripts, interactive shells): sm can't
+    see that.
 - **Activity tab:** every command run through `sm` (as written, with
-  placeholders), value fetches, views, changes, sign-ins and pairings. Never a
+  placeholders, and the secrets it used), value fetches, views, changes, sign-ins and pairings. Never a
   value. Kept 30 days or 10,000 entries.
 
 ### Command line reference
@@ -326,8 +356,9 @@ and an agent's transcript). Character sets: `alnum` (default), `hex`,
      ./installer.sh --client --server-url https://192.168.1.10:8737 --code ABCD-EFGH
    ```
 
-2. **On the other machine:** clone the repo and run that command. If sm is
-   already installed there:
+2. **On the other machine:** run the [one-line installer](#quick-start) with
+   those options (`… | bash -s -- --client --server-url … --code …`), or
+   `sm-setup --client …` if the package is installed. If sm is already set up there:
    `smctl login --server https://192.168.1.10:8737 --code ABCD-EFGH`.
    It downloads the server's CA certificate from `/ca.pem`, shows its
    fingerprint and asks you to compare it with the one `smctl pair` printed
@@ -476,7 +507,7 @@ git config --global --add credential.https://github.com.helper '!node /path/to/s
 ### The skill
 
 `skills/secret-manager/SKILL.md` is installed for Claude Code and opencode by
-the installer (as symlinks, so a `git pull` updates it). It tells agents to:
+the installer (as symlinks, so an update updates it). It tells agents to:
 
 - find secrets with `sm-ls` and use them as `$NAME` inside `sm -c '…'`;
 - create missing ones with `sm-add --generate` or a pipe, reuse existing ones,
@@ -522,7 +553,9 @@ environment.
 
 ## Security model
 
-**Where things live (server):** `.sm-server/` (folder 0700, files 0600)
+**Where things live (server):** `~/.local/share/sm/server/` (folder 0700, files
+0600; installs from before the npm package used `<project>/.sm-server/`, which is
+still used when it exists)
 
 | File | Contents |
 |---|---|
@@ -573,7 +606,7 @@ what is and isn't caught.
 | `SM_LAN_PORT` | `SM_PORT` | Its port. |
 | `SM_TLS_CERT`, `SM_TLS_KEY` | (none) | Certificate and key for HTTPS. |
 | `SM_TLS_CA` | (none) | CA certificate, served at `/ca.pem` for other machines. |
-| `SM_SERVER_DATA` | `.sm-server/` | Data folder. |
+| `SM_SERVER_DATA` | `~/.local/share/sm/server/` | Data folder (an existing `<project>/.sm-server/` wins). |
 | `SM_MASTER_KEY` | key file | 64 hex characters instead of `master.key`. |
 | `SM_AUDIT_DAYS`, `SM_AUDIT_MAX` | `30`, `10000` | Activity retention (0 = no limit). |
 | `SM_DEVICE` | hostname | This server's name in the vault (shown in conflicts and commits). |
@@ -586,7 +619,7 @@ what is and isn't caught.
 |---|---|
 | `SM_CONFIG` | Config file (default `~/.config/sm/config.json`, written by `smctl login`). |
 | `SM_SERVER`, `SM_TOKEN`, `SM_ADMIN_TOKEN` | Override server URL and tokens. |
-| `SM_BACKEND=file` | Use the local file store (`.sm/`) instead of a server. |
+| `SM_BACKEND=file` | Use the local file store (`~/.local/share/sm/local/`, or `SM_HOME`) instead of a server. |
 | `SM_AUTO_ENV=0` | Don't export secrets as `$NAME` (only placeholders in env/command are resolved). |
 | `SM_PROMPT` | Prompt tag of interactive shells (`SM_PROMPT=` turns it off). |
 | `SM_SCOPES` | Scopes when `sm` is started without `-s` (comma-separated); set by `sm -s` for nested shells. |
@@ -622,9 +655,11 @@ what is and isn't caught.
 sudo systemctl disable --now sm-server && sudo rm /etc/systemd/system/sm-server.service   # or ~/.config/systemd/user/
 rm /usr/local/bin/{sm,smctl,sm-ls,sm-add,sm-server,git-credential-sm}                     # or ~/.local/bin/
 rm ~/.claude/skills/secret-manager ~/.config/opencode/skills/secret-manager
+npm rm -g @lethevimlet/secret-manager
 cp ~/.gitconfig.before-sm ~/.gitconfig          # restores the previous git credential helper
 # remove the "secret-manager (sm)" block from ~/.claude/CLAUDE.md and ~/.config/opencode/AGENTS.md
-# the data (.sm-server/) and ~/.config/sm/ are left in place: delete them when you're sure
+# remove the "export PATH=…  # sm" line from ~/.bashrc (~/.zshrc, ~/.profile)
+# the data (~/.local/share/sm/) and ~/.config/sm/ are left in place: delete them when you're sure
 ```
 
 ---
@@ -632,7 +667,7 @@ cp ~/.gitconfig.before-sm ~/.gitconfig          # restores the previous git cred
 ## Development
 
 ```bash
-npm test        # 39 tests: output filter, quoting, shell, agent guard, git helper, server API
+npm test        # 64 tests: output filter, quoting, shell, agent guard, git helper, server API, scopes, usage, vault
 npm run demo    # leak matrix against a throwaway store
 npm run server  # run the server in the foreground
 ```
@@ -647,7 +682,10 @@ npm run server  # run the server in the foreground
 | `src/sm-rc.bash`, `src/sm-agents.bash` | Interactive prompt; agent guard. |
 | `server/` | API (`app.js`), encrypted store, GUI sign-in (`auth.js`), web GUI (`public/`). |
 | `skills/` | Agent skill and global instructions. |
-| `installer.sh` | Installer. |
+| `install.sh` | One-line installer: Node (nvm), the npm package, then `installer.sh`. |
+| `installer.sh` | Installer (`sm-setup`). |
+| `src/paths.js` | Data folders. |
+| `.github/workflows/npm-publish.yml` | Publishes to npm when the `package.json` version is new (repo secret `NPM_TOKEN`). |
 
 ---
 

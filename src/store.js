@@ -2,14 +2,12 @@
 // In the real design this is replaced by the remote endpoint / broker.
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const PKG_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+import { localStoreDir } from './paths.js';
 
 export const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export function storeDir() {
-  return process.env.SM_HOME || path.join(PKG_DIR, '.sm');
+  return localStoreDir();
 }
 
 function storeFile() {

@@ -29,12 +29,11 @@ import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import readline from 'node:readline/promises';
-import { fileURLToPath } from 'node:url';
 import { NAME_RE } from '../src/store.js';
 import { placeholder } from '../src/placeholders.js';
 import * as backend from '../src/backend.js';
+import { serverDataDir } from '../src/paths.js';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_SERVER = 'http://127.0.0.1:8737';
 const [, , command, ...rest] = process.argv;
 
@@ -122,7 +121,7 @@ async function main() {
       }
       if (!token && !adminToken) {
         // Same machine: read the tokens the server generated.
-        const dir = flag('--data') || process.env.SM_SERVER_DATA || path.join(ROOT, '.sm-server');
+        const dir = flag('--data') || serverDataDir();
         const tokens = JSON.parse(fs.readFileSync(path.join(dir, 'tokens.json'), 'utf8'));
         token = tokens.client;
         adminToken = tokens.admin;

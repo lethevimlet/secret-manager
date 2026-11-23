@@ -177,7 +177,7 @@ something that looks like a key, token or password (long random strings,
 - Never write secret values into files, commits, logs or messages. In
   config files and `.env` templates, use the variable name or the
   `{{secret:NAME}}` placeholder.
-- Don't read `.sm-server/`, `.sm/`, `~/.config/sm/` or `/proc/*/environ`
+- Don't read `~/.local/share/sm/`, `.sm-server/`, `.sm/`, `~/.config/sm/` or `/proc/*/environ`
   to get at secrets or tokens, and never call the sm server's API yourself
   (`/v1/secrets/*/reveal`, `/v1/resolve`): viewing values in the GUI is
   for the user only.

@@ -6,12 +6,14 @@
 #   ./installer.sh --server [--lan IP] [--tls-cert F --tls-key F --tls-ca F | --gen-tls]
 #   ./installer.sh --client --server-url https://HOST:8737 --code XXXX-XXXX [--ca-fingerprint SHA256]
 # Options: --bin DIR (where the commands go), --yes (accept defaults),
-#          --no-skill, --no-git, --no-service (server: don't install the systemd unit)
+#          --agents full|skill|none (default: ask; full = skill + always-on instructions),
+#          --no-skill (= --agents none), --no-git, --no-service (server: no systemd unit),
+#          --no-node (never install Node.js with nvm), --no-path (don't edit shell rc files)
 set -euo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 MODE="" YES=0 SKILL="" GIT="" SERVICE=1 LAN="" CERT="" KEY="" CA="" GEN_TLS=0
-SERVER_URL="" CODE="" CA_FP="" BIN_DIR="" PORT="${SM_PORT:-8737}" SYNC_MIN=""
+SERVER_URL="" CODE="" CA_FP="" BIN_DIR="" PORT="${SM_PORT:-8737}" SYNC_MIN="" AGENTS="" NODE_OK=1 EDIT_PATH=1
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -29,14 +31,18 @@ while [ $# -gt 0 ]; do
     --sync-interval) SYNC_MIN="$2"; shift ;;
     --bin) BIN_DIR="$2"; shift ;;
     --yes|-y) YES=1 ;;
-    --no-skill) SKILL=no ;;
+    --no-skill) AGENTS=none ;;
+    --agents) AGENTS="$2"; shift ;;
+    --no-node) NODE_OK=0 ;;
+    --no-path) EDIT_PATH=0 ;;
     --no-git) GIT=no ;;
     --no-service) SERVICE=0 ;;
-    -h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
 done
+case "$AGENTS" in ''|full|skill|none) ;; *) echo "--agents takes full, skill or none" >&2; exit 2 ;; esac
 
 bold() { printf '\e[1m%s\e[0m\n' "$*"; }
 info() { printf '  %s\n' "$*"; }
@@ -55,11 +61,31 @@ yesno() { # yesno "question" y|n -> 0 for yes
 
 # ---------- 1. Node and the commands ----------
 bold "1. Commands"
-NODE="$(command -v node || true)"
-[ -n "$NODE" ] || die "node not found (Node.js 20 or newer is needed)"
-NODE="$(readlink -f "$NODE")"
-NODE_MAJOR="$("$NODE" -p 'process.versions.node.split(".")[0]')"
-[ "$NODE_MAJOR" -ge 20 ] || die "Node.js $NODE_MAJOR found, 20 or newer is needed"
+NVM_VERSION=v0.40.3
+set +u  # nvm.sh is not written for set -u
+node_ok() { command -v node >/dev/null && [ "$(node -p 'process.versions.node.split(".")[0]')" -ge 20 ]; }
+load_nvm() { export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1; }
+if ! node_ok; then
+  load_nvm || true
+  node_ok || nvm use --lts >/dev/null 2>&1 || nvm use default >/dev/null 2>&1 || true
+fi
+if ! node_ok; then
+  have=$(command -v node >/dev/null && node -v || echo "not installed")
+  [ "$NODE_OK" = 1 ] || die "Node.js 20 or newer is needed (found: $have)"
+  yesno "Node.js 20+ is needed (found: $have). Install the current LTS with nvm (in ~/.nvm, no root needed)?" y \
+    || die "Node.js 20 or newer is needed"
+  if ! command -v nvm >/dev/null 2>&1; then
+    command -v curl >/dev/null || die "curl is needed to install nvm"
+    info "installing nvm $NVM_VERSION"
+    curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh" | bash >/dev/null
+    load_nvm || die "nvm did not install"
+  fi
+  info "installing Node.js LTS with nvm"
+  nvm install --lts >/dev/null && nvm alias default 'lts/*' >/dev/null
+  node_ok || die "Node.js install failed"
+fi
+NODE="$(readlink -f "$(command -v node)")"
+set -u
 info "node $("$NODE" -v) at $NODE"
 if [ ! -d "$REPO/node_modules/express" ]; then
   info "installing dependencies (npm ci)"
@@ -77,7 +103,16 @@ for cmd in sm smctl sm-ls sm-add sm-server git-credential-sm; do
   chmod 755 "$BIN_DIR/$cmd"
 done
 info "installed sm, smctl, sm-ls, sm-add, sm-server, git-credential-sm in $BIN_DIR"
-case ":$PATH:" in *":$BIN_DIR:"*) ;; *) info "note: add $BIN_DIR to your PATH" ;; esac
+case ":$PATH:" in *":$BIN_DIR:"*) ;; *)
+  if [ "$EDIT_PATH" = 1 ]; then
+    line="export PATH=\"$BIN_DIR:\$PATH\"  # sm"
+    for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+      [ -f "$rc" ] || [ "$rc" = "$HOME/.bashrc" ] || continue
+      grep -qF "$line" "$rc" 2>/dev/null || { printf '\n%s\n' "$line" >> "$rc"; info "added $BIN_DIR to PATH in $rc"; }
+    done
+    PATH_NOTE=1
+  else info "note: add $BIN_DIR to your PATH"; fi ;;
+esac
 SMCTL="$BIN_DIR/smctl"
 
 # ---------- 2. Server here, or pair with one elsewhere ----------
@@ -87,7 +122,12 @@ fi
 
 if [ "$MODE" = server ]; then
   bold "2. Server"
-  DATA="${SM_SERVER_DATA:-$REPO/.sm-server}"
+  # Keep the data folder of an existing install; otherwise ~/.local/share/sm/server
+  # (or an old <project>/.sm-server), never inside the package folder.
+  OLD_UNIT=/etc/systemd/system/sm-server.service; [ "$(id -u)" = 0 ] || OLD_UNIT="$HOME/.config/systemd/user/sm-server.service"
+  DATA="${SM_SERVER_DATA:-$(sed -n 's/^Environment=SM_SERVER_DATA=//p' "$OLD_UNIT" 2>/dev/null | tail -1)}"
+  [ -n "$DATA" ] || DATA="$("$NODE" --input-type=module -e "import('$REPO/src/paths.js').then((m) => console.log(m.serverDataDir()))")"
+  mkdir -p "$DATA"; chmod 700 "$DATA"
   if [ -z "$LAN" ] && [ -z "$CERT" ] && [ "$GEN_TLS" = 0 ]; then
     if yesno "Also serve the GUI on your network over HTTPS (needed for other machines)?" y; then
       ask "IP address to listen on" "$(hostname -I 2>/dev/null | awk '{print $1}')"; LAN=$REPLY
@@ -184,22 +224,41 @@ else
   "$SMCTL" status
 fi
 
-# ---------- 3. Agent skill + global instructions ----------
-if [ "$SKILL" != no ] && { [ "$SKILL" = yes ] || yesno "Install the secret-manager skill for Claude Code and opencode?" y; }; then
-  bold "3. Agent skill"
-  for dir in "$HOME/.claude/skills" "$HOME/.config/opencode/skills"; do
+# ---------- 3. Coding agents (Claude Code, opencode) ----------
+# full  = the skill + global instructions that make agents use sm from the
+#         first message on (~/.claude/CLAUDE.md, ~/.config/opencode/AGENTS.md)
+# skill = only the skill (agents load it when a task looks like it needs a secret)
+if [ -z "$AGENTS" ]; then
+  if [ "$YES" = 1 ] || [ ! -t 0 ]; then AGENTS=full; else
+    echo "Set up coding agents (Claude Code, opencode) to use sm?"
+    echo "  1) full  - skill + always-on instructions: agents use sm from the first message (recommended)"
+    echo "  2) skill - only the skill: agents load it when a task needs a secret"
+    echo "  3) none"
+    ask "Choice" 1
+    case "$REPLY" in 1|full) AGENTS=full ;; 2|skill) AGENTS=skill ;; *) AGENTS=none ;; esac
+  fi
+fi
+if [ "$AGENTS" != none ]; then
+  bold "3. Coding agents ($AGENTS)"
+  TARGETS=()
+  { command -v claude >/dev/null || [ -d "$HOME/.claude" ]; } && TARGETS+=(claude)
+  { command -v opencode >/dev/null || [ -d "$HOME/.config/opencode" ]; } && TARGETS+=(opencode)
+  [ ${#TARGETS[@]} -gt 0 ] || TARGETS=(claude opencode)
+  for t in "${TARGETS[@]}"; do
+    case $t in
+      claude) dir="$HOME/.claude/skills" f="$HOME/.claude/CLAUDE.md" ;;
+      opencode) dir="$HOME/.config/opencode/skills" f="$HOME/.config/opencode/AGENTS.md" ;;
+    esac
     mkdir -p "$dir"
     if [ -e "$dir/secret-manager" ] && [ ! -L "$dir/secret-manager" ]; then mv "$dir/secret-manager" "$dir/secret-manager.bak-$(date +%s)"; fi
     ln -sfn "$REPO/skills/secret-manager" "$dir/secret-manager"
-    info "linked $dir/secret-manager"
+    info "$t: skill linked in $dir/secret-manager"
+    if [ "$AGENTS" = full ]; then
+      touch "$f"
+      if grep -q 'secret-manager (sm)\|Using \*\*secret-manager\*\*' "$f"; then info "$t: $f already has the instructions"; else
+        [ -s "$f" ] && printf '\n' >> "$f"; cat "$REPO/skills/global-instructions.md" >> "$f"; info "$t: instructions added to $f"; fi
+    fi
   done
-  if yesno "Also announce it at the start of every agent conversation (global CLAUDE.md / AGENTS.md)?" y; then
-    for f in "$HOME/.claude/CLAUDE.md" "$HOME/.config/opencode/AGENTS.md"; do
-      mkdir -p "$(dirname "$f")"; touch "$f"
-      if grep -q 'secret-manager (sm)' "$f"; then info "$f already has it"; else
-        [ -s "$f" ] && printf '\n' >> "$f"; cat "$REPO/skills/global-instructions.md" >> "$f"; info "added to $f"; fi
-    done
-  fi
 fi
 
 # ---------- 4. GitHub through sm ----------
@@ -217,4 +276,5 @@ if [ "$GIT" != no ] && command -v git >/dev/null && { [ "$GIT" = yes ] || yesno 
 fi
 
 bold "Done."
+[ -z "${PATH_NOTE:-}" ] || info "open a new terminal (or run: export PATH=\"$BIN_DIR:\$PATH\") to use the commands"
 info "Try:  sm-ls    sm -c 'echo \$SOME_SECRET'    smctl status"

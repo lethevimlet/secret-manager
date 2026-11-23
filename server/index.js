@@ -2,7 +2,7 @@
 // sm-server: local secret manager API + GUI.
 //   SM_PORT          default 8737
 //   SM_BIND          default 127.0.0.1 (localhost only)
-//   SM_SERVER_DATA   default <project>/.sm-server
+//   SM_SERVER_DATA   default ~/.local/share/sm/server (or <project>/.sm-server if that exists)
 //   SM_MASTER_KEY    optional 64-hex master key (else a key file in the data dir)
 //   SM_TLS_CERT, SM_TLS_KEY   certificate for HTTPS
 //   SM_TLS_CA        CA certificate that signed it; served at /ca.pem for other machines
@@ -21,9 +21,8 @@ import { SecretStore } from './store.js';
 import { createApp, AuditLog } from './app.js';
 import { GuiAuth } from './auth.js';
 import { Vault } from './vault.js';
+import { serverDataDir } from '../src/paths.js';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export const DEFAULT_DATA = path.join(ROOT, '.sm-server');
 
 export function loadTokens(dir) {
   const file = path.join(dir, 'tokens.json');
@@ -42,7 +41,7 @@ export function loadTokens(dir) {
 
 const isMain = process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
-  const dir = process.env.SM_SERVER_DATA || DEFAULT_DATA;
+  const dir = serverDataDir();
   const port = Number(process.env.SM_PORT || 8737);
   const host = process.env.SM_BIND || '127.0.0.1';
 

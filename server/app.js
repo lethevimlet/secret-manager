@@ -10,7 +10,7 @@ import express from 'express';
 import { fileURLToPath } from 'node:url';
 import { COOKIE, MIN_PASSWORD, readCookie, isLoopback } from './auth.js';
 import { generateValue } from '../src/generate.js';
-import { cleanScope } from './store.js';
+import { cleanScope, cleanCategory } from './store.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 
@@ -330,6 +330,25 @@ export function createApp({ store, tokens, audit, noAuth = false, guiAuth = null
     res.json({ name: req.params.name, scope, value });
   });
 
+  // Rename or delete a category in one scope (?scope=). Deleting moves its
+  // secrets to Uncategorized; no secret is removed.
+  api.post('/categories/rename', need('admin'), (req, res) => {
+    const scope = scopeOf(req);
+    const { from, to } = req.body || {};
+    if (typeof from !== 'string' || typeof to !== 'string' || !to.trim()) return fail(res, 400, 'from and to (new name) required');
+    const names = store.renameCategory(from, to, scope);
+    if (names.length) audit.add({ type: 'category.rename', from: cleanCategory(from), to: cleanCategory(to), names, ...withScope(scope), by: req.anonymous ? 'anonymous' : req.session ? 'gui' : 'admin' });
+    res.json({ from: cleanCategory(from), to: cleanCategory(to), names });
+  });
+  api.post('/categories/delete', need('admin'), (req, res) => {
+    const scope = scopeOf(req);
+    const { name } = req.body || {};
+    if (typeof name !== 'string' || !name.trim()) return fail(res, 400, 'name required');
+    const names = store.renameCategory(name, '', scope);
+    if (names.length) audit.add({ type: 'category.delete', category: cleanCategory(name), names, ...withScope(scope), by: req.anonymous ? 'anonymous' : req.session ? 'gui' : 'admin' });
+    res.json({ name: cleanCategory(name), names });
+  });
+
   // Delete a whole scope and its secrets (admin). Needs { confirm: "<scope>" },
   // the scope's name typed again, so it can't happen by accident.
   api.post('/scopes/:scope/delete', need('admin'), (req, res) => {
@@ -355,6 +374,14 @@ export function createApp({ store, tokens, audit, noAuth = false, guiAuth = null
 
   api.post('/audit', (req, res) => {
     const e = req.body || {};
+    const scopeList = Array.isArray(e.scopes) && e.scopes.length ? e.scopes.slice(0, 32).map(String) : [];
+    // Names the command actually used (referenced in it, or handed to git by
+    // the credential helper): only these count in "Last used" / "Uses".
+    const asked = Array.isArray(e.used) ? e.used.slice(0, 200).filter((n) => typeof n === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(n)) : [];
+    let used = [];
+    try {
+      used = asked.length ? store.markUsed(asked, scopeList.length ? scopeList : ['']) : [];
+    } catch { /* an invalid scope name: just don't count */ }
     audit.add({
       type: 'command',
       by: req.role,
@@ -364,7 +391,8 @@ export function createApp({ store, tokens, audit, noAuth = false, guiAuth = null
       redactions: e.redactions && typeof e.redactions === 'object' ? e.redactions : {},
       exit: Number.isInteger(e.exit) ? e.exit : null,
       cwd: typeof e.cwd === 'string' ? e.cwd.slice(0, 500) : null,
-      ...(Array.isArray(e.scopes) && e.scopes.length && { scopes: e.scopes.slice(0, 32).map(String) }),
+      ...(scopeList.length && { scopes: scopeList }),
+      ...(used.length && { used }),
     });
     res.status(204).end();
   });

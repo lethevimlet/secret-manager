@@ -79,7 +79,7 @@ function enterApp({ openMode = false } = {}) {
   $('#app').hidden = false;
   showOpenMode(openMode);
   $('#change-password').hidden = openMode || Boolean(token);
-  switchTab(location.hash === '#activity' ? 'activity' : 'secrets');
+  switchTab(['#activity', '#sync'].includes(location.hash) ? location.hash.slice(1) : 'secrets');
 }
 
 // Show the password form, or the first-time setup form.
@@ -171,11 +171,15 @@ function switchTab(name) {
   for (const b of document.querySelectorAll('[data-tab]')) b.setAttribute('aria-selected', String(b.dataset.tab === name));
   $('#tab-secrets').hidden = name !== 'secrets';
   $('#tab-activity').hidden = name !== 'activity';
-  history.replaceState(null, '', name === 'activity' ? '#activity' : location.pathname);
+  $('#tab-sync').hidden = name !== 'sync';
+  history.replaceState(null, '', name === 'secrets' ? location.pathname : '#' + name);
   clearInterval(timer);
   if (name === 'secrets') {
     loadSecrets();
     timer = setInterval(loadSecrets, 10000);
+  } else if (name === 'sync') {
+    loadSync();
+    timer = setInterval(loadSync, 5000);
   } else {
     loadActivity();
     timer = setInterval(() => $('#auto').checked && loadActivity(), 3000);
@@ -618,6 +622,12 @@ function describe(e) {
     case 'auth.setup': return [el('span', { class: 'badge change' }, 'password set'), el('span', { class: 'muted' }, `first-time setup from ${e.ip}`)];
     case 'auth.setup-failed': return [el('span', { class: 'badge delete' }, 'setup refused'), el('span', { class: 'muted' }, `wrong setup code from ${e.ip}`)];
     case 'auth.password': return [el('span', { class: 'badge change' }, 'password changed'), el('span', { class: 'muted' }, `with the ${e.by} from ${e.ip}`)];
+    case 'sync': return [el('span', { class: 'badge change' }, 'synced'), el('span', { class: 'muted' }, `${e.pulled} from the vault, ${e.pushed} to it (${e.reason})`)];
+    case 'sync.conflict': return [el('span', { class: 'badge delete' }, 'sync conflict'), el('code', {}, e.name), el('span', { class: 'muted' }, ` changed on ${e.kept} and ${e.lost}; kept ${e.kept} (newer)`)];
+    case 'sync.error': return [el('span', { class: 'badge delete' }, 'sync failed'), el('span', { class: 'muted' }, e.error)];
+    case 'vault.init': return [el('span', { class: 'badge change' }, 'vault created'), el('code', {}, e.repo)];
+    case 'vault.join': return [el('span', { class: 'badge change' }, 'joined vault'), el('code', {}, e.repo)];
+    case 'vault.join-failed': return [el('span', { class: 'badge delete' }, 'vault join refused'), el('span', { class: 'muted' }, `wrong key file password from ${e.ip}`)];
     case 'resolve': return [el('span', { class: 'badge' }, 'values fetched'), el('span', { class: 'muted' }, `${e.count} secret${e.count === 1 ? '' : 's'} by ${e.by}`)];
     default: return [el('span', { class: 'badge' }, e.type)];
   }
@@ -691,3 +701,94 @@ function showOpenMode(on) {
   } catch {}
   showLogin();
 })();
+
+// ---------- sync (sm-vault) ----------
+function downloadJson(obj, filename) {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(obj, null, 2) + '\n'], { type: 'application/json' }));
+  const a = el('a', { href: url, download: filename });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function loadSync() {
+  let st;
+  try { st = await api('/vault'); } catch (err) { if (err.message !== 'unauthorized') toast(err.message, true); return; }
+  $('#sync-on').hidden = !st.configured;
+  $('#sync-off').hidden = st.configured;
+  if (!st.configured) return;
+  $('#sync-repo').textContent = st.repo;
+  $('#sync-device').textContent = st.device;
+  const r = st.lastResult;
+  $('#sync-last').textContent = st.syncing ? 'syncing…' : st.lastSync
+    ? `${ago(st.lastSync)}${r ? ` · ${r.pulled} from the vault, ${r.pushed} to it${r.conflicts ? `, ${r.conflicts} conflict(s)` : ''}` : ''}`
+    : 'never';
+  showError('#sync-error', st.lastError ? `Last sync failed: ${st.lastError}` : '');
+}
+
+$('#sync-now').addEventListener('click', async (ev) => {
+  ev.target.disabled = true;
+  try {
+    const { result } = await api('/vault/sync', { method: 'POST' });
+    toast(`Synced: ${result.pulled} from the vault, ${result.pushed} to it`);
+  } catch (err) { toast(err.message, true); }
+  ev.target.disabled = false;
+  loadSync();
+});
+
+$('#sync-show-key').addEventListener('click', async () => {
+  try {
+    const { publicKey } = await api('/vault/deploy-key');
+    $('#sync-key').value = publicKey;
+    $('#sync-key-box').hidden = false;
+  } catch (err) { toast(err.message, true); }
+});
+$('#sync-copy-key').addEventListener('click', async () => { if (await copyText($('#sync-key').value, $('#sync-key'))) toast('Deploy key copied'); else $('#sync-key').select(); });
+
+$('#sync-init-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const btn = ev.submitter;
+  btn.disabled = true;
+  showError('#sync-init-error', '');
+  try {
+    const { keyFile } = await api('/vault/init', { method: 'POST', body: { repo: $('#sync-init-repo').value.trim(), password: $('#sync-init-pw').value } });
+    $('#sync-init-pw').value = '';
+    downloadJson(keyFile, 'sm-vault.key');
+    toast('Vault created. Keep sm-vault.key safe (and one copy offline).');
+    loadSync();
+  } catch (err) { showError('#sync-init-error', err.message); }
+  btn.disabled = false;
+});
+
+$('#sync-join-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const btn = ev.submitter;
+  btn.disabled = true;
+  showError('#sync-join-error', '');
+  try {
+    const file = $('#sync-join-file').files[0];
+    let keyFile;
+    try { keyFile = JSON.parse(await file.text()); } catch { throw new Error('that is not an sm-vault key file'); }
+    await api('/vault/join', { method: 'POST', body: { keyFile, password: $('#sync-join-pw').value } });
+    $('#sync-join-pw').value = '';
+    toast('Joined the vault');
+    loadSync();
+  } catch (err) { showError('#sync-join-error', err.message); }
+  btn.disabled = false;
+});
+
+$('#sync-keyfile').addEventListener('click', () => {
+  $('#kf-pw').value = '';
+  showError('#kf-error', '');
+  $('#keyfile-dialog').showModal();
+});
+$('#keyfile-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  try {
+    const { keyFile } = await api('/vault/key-file', { method: 'POST', body: { password: $('#kf-pw').value } });
+    $('#kf-pw').value = '';
+    downloadJson(keyFile, 'sm-vault.key');
+    $('#keyfile-dialog').close();
+  } catch (err) { showError('#kf-error', err.message); }
+});

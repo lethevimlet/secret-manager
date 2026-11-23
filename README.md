@@ -38,6 +38,7 @@ Requirements: Linux, Node.js 20+, bash, util-linux `script` (interactive shell),
 - [Using `sm`](#using-sm)
 - [Managing secrets](#managing-secrets): [GUI](#gui) · [command line](#command-line-reference)
 - [Other machines](#using-the-server-from-other-machines)
+- [Syncing several servers (sm-vault)](#syncing-several-servers-sm-vault)
 - [GitHub (git and gh)](#github-git-and-gh)
 - [AI agents](#ai-agents)
 - [Security model](#security-model)
@@ -245,6 +246,12 @@ and an agent's transcript). Character sets: `alnum` (default), `hex`,
 | `smctl rm NAME` | Delete a secret. |
 | `smctl audit [N]` | Last N activity entries. |
 | `smctl env` | Print `export NAME='{{secret:NAME}}'` lines. |
+| `smctl sync [status]` | Vault state: repository, last sync, last error. |
+| `smctl sync deploy-key` | This server's SSH key, to add to the vault repository. |
+| `smctl sync init --repo URL [--out FILE]` | First server: create the vault, write `sm-vault.key`. |
+| `smctl sync join --key-file FILE` | Another server: join with the key file and its password. |
+| `smctl sync now` | Sync immediately. |
+| `smctl sync key-file [--out FILE]` | A fresh key file, locked with the current GUI password. |
 | `smctl pair` | One-time code for another machine. |
 | `smctl setup-code` | Code for setting the first GUI password from another machine. |
 | `smctl passwd` | Set or reset the GUI password. |
@@ -278,6 +285,74 @@ codes are rate-limited; each pairing appears in Activity with the machine's
 name. The server must serve HTTPS on the network (`--lan`) and publish its CA
 (`--gen-tls` or `--tls-ca`); otherwise copy the CA certificate over and add
 `--ca /path/ca.crt` to `smctl login`.
+
+---
+
+## Syncing several servers (sm-vault)
+
+Pairing (above) is enough for machines that can reach the server. When a
+machine needs **its own** server (away from home, or so secrets keep working
+while this one is off), several servers can share their secrets through a
+private git repository, e.g. `sm-vault` on GitHub.
+
+**What is where**
+
+- **The repository** holds only ciphertext: one AES-256-GCM file per secret,
+  named by a keyed hash of the secret's name. GitHub sees neither names nor
+  values, only how many secrets there are and when they change.
+- **The vault key** (random, 256 bits) is never in the repository. It is in
+  the **key file** `sm-vault.key`, locked with your GUI password (scrypt). A
+  leaked repository alone can't be attacked by guessing passwords: there is
+  nothing in it to test a guess against. You need the key file **and** the
+  password.
+- **Each server** unlocks the key file once, when it joins, and then keeps the
+  vault key in its data folder (sealed with its `master.key`), so it starts
+  and syncs unattended. Changing a server's GUI password later doesn't affect
+  the key file; `smctl sync key-file` makes a fresh copy with the current one.
+- **Synced:** values, categories, notes, deletions. **Per server:** GUI
+  password, tokens, pairings, Activity.
+
+> **Keep one copy of `sm-vault.key` offline** (password manager, USB stick).
+> If every copy is lost, nobody, you included, can decrypt the repository.
+
+**Set up** (GUI: **Sync** tab; or the commands below)
+
+1. Create an empty **private** repository, e.g. `sm-vault`.
+2. On each server, get its deploy key and add it to the repository under
+   *Settings › Deploy keys* with **write access**. Every server has its own
+   key, so one machine can be revoked without touching the others.
+
+   ```bash
+   smctl sync deploy-key
+   ```
+
+3. **First server:** create the vault. Every secret on this server is
+   uploaded, and `sm-vault.key` is written (asks for the GUI password).
+
+   ```bash
+   smctl sync init --repo git@github.com:you/sm-vault.git
+   ```
+
+4. **Every other server:** copy `sm-vault.key` over and join (asks for the
+   password the key file was made with). Secrets from the vault are added;
+   secrets only this server has are uploaded. A brand-new server without a GUI
+   password takes this password as its GUI password.
+
+   ```bash
+   smctl sync join --key-file sm-vault.key
+   ```
+
+**How syncing works.** Each server pulls and pushes every 5 minutes
+(`SM_VAULT_INTERVAL`) and a few seconds after any change. Per secret, the
+newer change wins; when the same secret was changed on two servers since the
+last sync, Activity shows a **sync conflict** naming which server's version was
+kept. Deletions are remembered, so a server that was offline does not bring a
+deleted secret back; re-creating the secret later is a newer change and syncs
+normally. `smctl sync` shows the state, `smctl sync now` syncs immediately.
+
+**Trade-offs.** Every server holds every secret: a compromised server exposes
+all of them, as with one server today. The repository's history (ciphertext)
+stays on the git host for good.
 
 ---
 
@@ -415,6 +490,8 @@ what is and isn't caught.
 | `SM_SERVER_DATA` | `.sm-server/` | Data folder. |
 | `SM_MASTER_KEY` | key file | 64 hex characters instead of `master.key`. |
 | `SM_AUDIT_DAYS`, `SM_AUDIT_MAX` | `30`, `10000` | Activity retention (0 = no limit). |
+| `SM_DEVICE` | hostname | This server's name in the vault (shown in conflicts and commits). |
+| `SM_VAULT_INTERVAL` | `300` | Seconds between vault syncs. |
 | `SM_NO_AUTH=1` | off | **Testing only:** GUI without password (viewing values still needs the admin token). |
 
 **Client** (`sm`, `smctl`, `sm-ls`, `sm-add`)

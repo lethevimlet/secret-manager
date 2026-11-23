@@ -13,6 +13,12 @@
 //   smctl rm NAME
 //   smctl env                 `export NAME='{{secret:NAME}}'` lines
 //   smctl audit [N]
+//   smctl sync [status]       vault state (sm-vault, sync between servers)
+//   smctl sync deploy-key     this server's SSH public key, to add as a deploy key (write access) to the repo
+//   smctl sync init --repo GIT_URL [--out sm-vault.key]   first server: create the vault, write the key file
+//   smctl sync join --key-file sm-vault.key               another server: join with the key file + password
+//   smctl sync now            sync immediately
+//   smctl sync key-file [--out sm-vault.key]              a fresh copy of the key file (current GUI password)
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -213,11 +219,88 @@ async function main() {
     case 'env':
       for (const { name } of await backend.listSecrets()) process.stdout.write(`export ${name}='${placeholder(name)}'\n`);
       return 0;
+    case 'sync':
+      return syncCommand(rest.shift() || 'status');
     case 'audit':
       for (const e of await backend.readAudit(Number(rest[0] || 20))) process.stdout.write(JSON.stringify(e) + '\n');
       return 0;
     default:
-      return fail('usage: smctl {login|logout|status|gui|pair|setup-code|passwd|set NAME|rotate NAME|list [-l]|rm NAME|env|audit [N]}');
+      return fail('usage: smctl {login|logout|status|gui|pair|setup-code|passwd|set NAME|rotate NAME|list [-l]|rm NAME|env|audit [N]|sync …}');
+  }
+}
+
+const LONG = { admin: true, timeoutMs: 180_000 };
+
+function printVault(st) {
+  if (!st.configured) {
+    process.stdout.write('not connected to a vault (smctl sync init --repo … or smctl sync join --key-file …)\n');
+    return;
+  }
+  const r = st.lastResult;
+  process.stdout.write(`repo:       ${st.repo}\ndevice:     ${st.device}\nlast sync:  ${fmtTime(st.lastSync)}` +
+    (r ? `  (pulled ${r.pulled}, pushed ${r.pushed}, conflicts ${r.conflicts})` : '') + '\n' +
+    (st.lastError ? `last error: ${st.lastError}\n` : ''));
+}
+
+async function askPassword(what) {
+  const pw = await readValue(what);
+  if (!pw) throw new Error('no password given');
+  return pw;
+}
+
+function writeKeyFile(keyFile, out) {
+  const file = path.resolve(out || 'sm-vault.key');
+  fs.writeFileSync(file, JSON.stringify(keyFile, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+  return file;
+}
+
+async function syncCommand(sub) {
+  switch (sub) {
+    case 'status':
+      printVault(await backend.request('/vault', { admin: true }));
+      return 0;
+    case 'deploy-key': {
+      const { publicKey } = await backend.request('/vault/deploy-key', { admin: true });
+      process.stdout.write(publicKey + '\n');
+      process.stderr.write('Add it to the vault repository as a deploy key with write access (GitHub: Settings > Deploy keys).\n');
+      return 0;
+    }
+    case 'init': {
+      const repo = flag('--repo');
+      if (!repo) return fail('usage: smctl sync init --repo GIT_URL [--out sm-vault.key]');
+      const out = flag('--out');
+      if (fs.existsSync(path.resolve(out || 'sm-vault.key'))) return fail(`${out || 'sm-vault.key'} already exists`);
+      const password = await askPassword('GUI password (locks the key file)');
+      const { keyFile, status } = await backend.request('/vault/init', { method: 'POST', body: { repo, password }, ...LONG });
+      const file = writeKeyFile(keyFile, out);
+      printVault(status);
+      process.stderr.write(`\nKey file: ${file}\nCopy it to every machine that should join, and keep one copy offline:\nwithout it nobody, you included, can decrypt the vault.\n`);
+      return 0;
+    }
+    case 'join': {
+      const keyPath = flag('--key-file');
+      if (!keyPath) return fail('usage: smctl sync join --key-file sm-vault.key');
+      const keyFile = JSON.parse(fs.readFileSync(keyPath, 'utf8'));
+      const password = await askPassword('password of the key file');
+      const { status } = await backend.request('/vault/join', { method: 'POST', body: { keyFile, password }, ...LONG });
+      printVault(status);
+      return 0;
+    }
+    case 'now': {
+      const { status } = await backend.request('/vault/sync', { method: 'POST', ...LONG });
+      printVault(status);
+      return status.lastError ? 1 : 0;
+    }
+    case 'key-file': {
+      const out = flag('--out');
+      if (fs.existsSync(path.resolve(out || 'sm-vault.key'))) return fail(`${out || 'sm-vault.key'} already exists`);
+      const password = await askPassword('GUI password');
+      const { keyFile } = await backend.request('/vault/key-file', { method: 'POST', body: { password }, ...LONG });
+      process.stderr.write(`Key file: ${writeKeyFile(keyFile, out)}\n`);
+      return 0;
+    }
+    default:
+      return fail('usage: smctl sync {status|deploy-key|init --repo URL|join --key-file FILE|now|key-file}');
   }
 }
 

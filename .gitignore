@@ -1,3 +1,5 @@
 .sm/
 node_modules/
 .sm-server/
+sm-vault.key
+*.sm-vault.key

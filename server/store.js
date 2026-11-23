@@ -5,6 +5,7 @@
 // key file next to the data (0600), which only protects a copied data file.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 export const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
@@ -41,20 +42,39 @@ function loadKey(dir) {
 }
 
 export class SecretStore {
-  constructor(dir) {
+  constructor(dir, { device = process.env.SM_DEVICE || os.hostname() } = {}) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     this.file = path.join(dir, 'secrets.json');
+    this.tombFile = path.join(dir, 'tombstones.json');
     this.key = loadKey(dir);
+    this.device = device;
+    this.onChange = null; // (name) => void, e.g. schedule a vault sync
     try {
       this.data = JSON.parse(fs.readFileSync(this.file, 'utf8'));
     } catch (err) {
       if (err.code !== 'ENOENT') throw err;
       this.data = {};
     }
+    // Deleted secrets are remembered (name -> { changedAt, changedBy }) so a sync
+    // can tell "deleted here" from "never seen here".
+    try {
+      this.tombstones = JSON.parse(fs.readFileSync(this.tombFile, 'utf8'));
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+      this.tombstones = {};
+    }
   }
 
   save() {
     writeAtomic(this.file, JSON.stringify(this.data, null, 2) + '\n');
+  }
+
+  saveTombstones() {
+    writeAtomic(this.tombFile, JSON.stringify(this.tombstones, null, 2) + '\n');
+  }
+
+  changed(name) {
+    try { this.onChange?.(name); } catch {}
   }
 
   encrypt(name, value) {
@@ -98,8 +118,12 @@ export class SecretStore {
       updatedAt: now,
       lastUsedAt: prev?.lastUsedAt || null,
       uses: prev?.uses || 0,
+      changedAt: now,
+      changedBy: this.device,
     };
     this.save();
+    if (this.tombstones[name]) { delete this.tombstones[name]; this.saveTombstones(); }
+    this.changed(name);
     return !prev;
   }
 
@@ -109,7 +133,10 @@ export class SecretStore {
     const cat = cleanCategory(category);
     if (cat !== undefined) this.data[name].category = cat;
     if (note !== undefined) this.data[name].note = String(note).slice(0, 200);
+    this.data[name].changedAt = new Date().toISOString();
+    this.data[name].changedBy = this.device;
     this.save();
+    this.changed(name);
     return true;
   }
 
@@ -121,7 +148,72 @@ export class SecretStore {
     if (!this.has(name)) return false;
     delete this.data[name];
     this.save();
+    this.tombstones[name] = { changedAt: new Date().toISOString(), changedBy: this.device };
+    this.saveTombstones();
+    this.changed(name);
     return true;
+  }
+
+  // ---- vault sync ----
+
+  // Every name this store knows, live or deleted.
+  syncNames() {
+    return [...new Set([...Object.keys(this.data), ...Object.keys(this.tombstones)])];
+  }
+
+  // The synced state of one name: value + metadata, or a deletion marker.
+  syncEntry(name) {
+    const s = this.data[name];
+    if (s) {
+      return {
+        name, value: this.decrypt(name, s), category: s.category || '', note: s.note || '',
+        createdAt: s.createdAt, changedAt: s.changedAt || s.updatedAt, changedBy: s.changedBy || this.device,
+      };
+    }
+    const t = this.tombstones[name];
+    return t ? { name, deleted: true, changedAt: t.changedAt, changedBy: t.changedBy } : null;
+  }
+
+  // Apply an entry that won against the local state (from another server).
+  // Does not trigger onChange: it is not a local change to push back.
+  applySyncEntry(e) {
+    if (e.deleted) {
+      if (this.data[e.name]) { delete this.data[e.name]; this.save(); }
+      this.tombstones[e.name] = { changedAt: e.changedAt, changedBy: e.changedBy };
+      this.saveTombstones();
+      return;
+    }
+    if (!NAME_RE.test(e.name) || typeof e.value !== 'string' || !e.value) throw new Error(`invalid synced entry ${e.name}`);
+    const prev = this.data[e.name];
+    this.data[e.name] = {
+      ...this.encrypt(e.name, e.value),
+      category: cleanCategory(e.category ?? '') || '',
+      note: String(e.note ?? '').slice(0, 200),
+      createdAt: prev?.createdAt || e.createdAt || e.changedAt,
+      updatedAt: e.changedAt,
+      lastUsedAt: prev?.lastUsedAt || null,
+      uses: prev?.uses || 0,
+      changedAt: e.changedAt,
+      changedBy: e.changedBy,
+    };
+    this.save();
+    if (this.tombstones[e.name]) { delete this.tombstones[e.name]; this.saveTombstones(); }
+  }
+
+  // Raw AES-256-GCM with the master key, for other small files (vault key).
+  sealRaw(buf, aad) {
+    const iv = crypto.randomBytes(12);
+    const c = crypto.createCipheriv('aes-256-gcm', this.key, iv);
+    c.setAAD(Buffer.from(aad));
+    const data = Buffer.concat([c.update(buf), c.final()]);
+    return { iv: iv.toString('base64'), tag: c.getAuthTag().toString('base64'), data: data.toString('base64') };
+  }
+
+  openRaw({ iv, tag, data }, aad) {
+    const d = crypto.createDecipheriv('aes-256-gcm', this.key, Buffer.from(iv, 'base64'));
+    d.setAAD(Buffer.from(aad));
+    d.setAuthTag(Buffer.from(tag, 'base64'));
+    return Buffer.concat([d.update(Buffer.from(data, 'base64')), d.final()]);
   }
 
   // One value, for the owner viewing it in the GUI. Not counted as a use.

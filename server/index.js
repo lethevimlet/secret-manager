@@ -10,6 +10,8 @@
 //   SM_AUDIT_MAX     keep at most this many activity entries (default 10000, 0 = no limit)
 //   SM_NO_AUTH=1     TESTING ONLY: manage secrets without a token (values still need one)
 //   SM_LAN_BIND      optional extra HTTPS listener, e.g. 192.168.1.10 (SM_LAN_PORT, default SM_PORT)
+//   SM_DEVICE        this server's name in the vault (default: hostname)
+//   SM_VAULT_INTERVAL  seconds between vault syncs (default 300)
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import https from 'node:https';
@@ -18,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { SecretStore } from './store.js';
 import { createApp, AuditLog } from './app.js';
 import { GuiAuth } from './auth.js';
+import { Vault } from './vault.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const DEFAULT_DATA = path.join(ROOT, '.sm-server');
@@ -48,7 +51,11 @@ if (isMain) {
   const noAuth = process.env.SM_NO_AUTH === '1';
   const guiAuth = new GuiAuth(dir);
   if (!guiAuth.passwordSet) console.log('GUI: no password yet; set it on first visit (from another machine: smctl setup-code)');
-  const app = createApp({ store, tokens, audit: new AuditLog(path.join(dir, 'audit.log'), { days: Number(process.env.SM_AUDIT_DAYS ?? 30), max: Number(process.env.SM_AUDIT_MAX ?? 10000) }), noAuth, guiAuth, caPem: process.env.SM_TLS_CA ? fs.readFileSync(process.env.SM_TLS_CA, 'utf8') : null });
+  const audit = new AuditLog(path.join(dir, 'audit.log'), { days: Number(process.env.SM_AUDIT_DAYS ?? 30), max: Number(process.env.SM_AUDIT_MAX ?? 10000) });
+  const vault = new Vault({ dir, store, audit, intervalMs: Number(process.env.SM_VAULT_INTERVAL || 300) * 1000 });
+  vault.start();
+  if (vault.configured) console.log(`vault: syncing with ${vault.state.repo}`);
+  const app = createApp({ store, tokens, audit, noAuth, guiAuth, vault, caPem: process.env.SM_TLS_CA ? fs.readFileSync(process.env.SM_TLS_CA, 'utf8') : null });
   if (noAuth) console.warn('WARNING: SM_NO_AUTH=1, anyone who can reach the server can add, replace and delete secrets');
 
   // Listener 1: plain HTTP on loopback, for sm/smctl on this machine.
@@ -75,7 +82,7 @@ if (isMain) {
   if (created) console.log(`new tokens written to ${path.join(dir, 'tokens.json')}`);
   console.log('connect the CLI:  smctl login      open the GUI:  smctl gui');
   for (const l of listeners) l.on('error', (err) => { console.error(err.message); process.exit(1); });
-  const stop = () => Promise.all(listeners.map((l) => new Promise((r) => l.close(r)))).then(() => process.exit(0));
+  const stop = () => vault.stop() || Promise.all(listeners.map((l) => new Promise((r) => l.close(r)))).then(() => process.exit(0));
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
 }

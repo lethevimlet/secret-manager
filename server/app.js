@@ -67,7 +67,7 @@ export class AuditLog {
   }
 }
 
-export function createApp({ store, tokens, audit, noAuth = false, guiAuth = null, caPem = null }) {
+export function createApp({ store, tokens, audit, noAuth = false, guiAuth = null, caPem = null, vault = null }) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', false);
@@ -221,6 +221,44 @@ export function createApp({ store, tokens, audit, noAuth = false, guiAuth = null
         setCookie(req, res, id, maxAge);
       }
       res.json({ ok: true });
+    });
+  }
+
+  // ---- sm-vault: sync with other servers through a private git repository ----
+  if (vault) {
+    const owner = (req, res, next) => (req.anonymous ? fail(res, 401, 'the vault needs the admin token or a signed-in GUI') : next());
+    // The key file is locked with the GUI password: check it, so the copy the
+    // user carries around opens with the password they actually use.
+    const checkPassword = async (password) => {
+      if (typeof password !== 'string' || !password) throw Object.assign(new Error('password required'), { status: 400 });
+      if (guiAuth?.passwordSet && !(await guiAuth.verify(password))) throw Object.assign(new Error('that is not this server\'s GUI password'), { status: 403 });
+    };
+    api.get('/vault', need('admin'), owner, (_req, res) => res.json(vault.status()));
+    api.get('/vault/deploy-key', need('admin'), owner, async (_req, res) => res.json({ publicKey: await vault.deployPublicKey() }));
+    api.post('/vault/init', need('admin'), owner, async (req, res) => {
+      const { repo, password } = req.body || {};
+      if (typeof repo !== 'string' || !repo) return fail(res, 400, 'repo required');
+      await checkPassword(password);
+      const keyFile = await vault.init({ repo, password });
+      audit.add({ type: 'vault.init', repo, by: req.session ? 'gui' : 'admin token', ip: ip(req) });
+      res.json({ keyFile, status: vault.status() });
+    });
+    api.post('/vault/join', need('admin'), owner, async (req, res) => {
+      const { keyFile, password } = req.body || {};
+      const status = await vault.join({ keyFile, password }).catch((err) => {
+        if (err.status === 403) audit.add({ type: 'vault.join-failed', ip: ip(req) });
+        throw err;
+      });
+      // A new server takes the vault's password as its GUI password.
+      if (guiAuth && !guiAuth.passwordSet) await guiAuth.setPassword(password);
+      audit.add({ type: 'vault.join', repo: status.repo, by: req.session ? 'gui' : 'admin token', ip: ip(req) });
+      res.json({ status });
+    });
+    api.post('/vault/sync', need('admin'), owner, async (_req, res) => res.json({ result: await vault.syncNow('manual'), status: vault.status() }));
+    // A fresh copy of the key file, locked with the current GUI password.
+    api.post('/vault/key-file', need('admin'), owner, async (req, res) => {
+      await checkPassword(req.body?.password);
+      res.json({ keyFile: await vault.exportKeyFile(req.body.password) });
     });
   }
 

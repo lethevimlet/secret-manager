@@ -48,6 +48,7 @@
       <nav class="tabs" role="tablist">
         <button role="tab" data-tab="secrets" aria-selected="true">Secrets</button>
         <button role="tab" data-tab="activity" aria-selected="false">Activity</button>
+        <button role="tab" data-tab="sync" aria-selected="false">Sync</button>
       </nav>
       <div class="topbar-right">
         <span id="status" class="status"><span class="dot"></span><span>connected</span></span>
@@ -134,6 +135,63 @@
       </div>
     </section>
 
+    <section id="tab-sync" class="page" hidden>
+      <div class="page-head">
+        <div>
+          <h2>Sync</h2>
+          <p class="muted">Keep several sm servers in sync through a private git repository (sm-vault). The repository holds only ciphertext with hashed names; the key is in a key file locked with your password.</p>
+        </div>
+      </div>
+
+      <div id="sync-on" class="card sync-card" hidden>
+        <dl class="sync-facts">
+          <dt>Repository</dt><dd><code id="sync-repo"></code></dd>
+          <dt>This server</dt><dd id="sync-device"></dd>
+          <dt>Last sync</dt><dd id="sync-last"></dd>
+        </dl>
+        <p id="sync-error" class="error" role="alert" hidden></p>
+        <div class="row">
+          <button id="sync-now" class="primary" type="button">Sync now</button>
+          <button id="sync-keyfile" class="ghost" type="button">Download a key file</button>
+        </div>
+        <p class="muted">Syncs every 5 minutes and a few seconds after every change. When the same secret changed on two servers, the newer change wins and Activity says so.</p>
+      </div>
+
+      <div id="sync-off" hidden>
+        <div class="card sync-card">
+          <h3>1. Give this server access to the repository</h3>
+          <p class="muted">Create a <strong>private</strong> repository (e.g. <code>sm-vault</code>, empty for the first server). Add this server's key under <em>Settings › Deploy keys</em> with <strong>write access</strong>. Each server has its own key, so you can revoke one machine.</p>
+          <div class="row"><button id="sync-show-key" class="ghost" type="button">Show this server's deploy key</button></div>
+          <div id="sync-key-box" hidden>
+            <textarea id="sync-key" rows="2" readonly></textarea>
+            <div class="row"><button id="sync-copy-key" class="ghost" type="button">Copy</button></div>
+          </div>
+        </div>
+        <div class="sync-grid">
+          <form id="sync-init-form" class="card sync-card">
+            <h3>2a. First server: create the vault</h3>
+            <p class="muted">Uploads every secret here, encrypted, and gives you <code>sm-vault.key</code>. Keep a copy offline: without it nobody can decrypt the vault.</p>
+            <label for="sync-init-repo">Repository (SSH URL)</label>
+            <input id="sync-init-repo" placeholder="git@github.com:you/sm-vault.git" required autocomplete="off">
+            <label for="sync-init-pw">Your GUI password</label>
+            <input id="sync-init-pw" type="password" autocomplete="current-password" required>
+            <p id="sync-init-error" class="error" role="alert" hidden></p>
+            <div class="row"><button class="primary" type="submit">Create vault</button></div>
+          </form>
+          <form id="sync-join-form" class="card sync-card">
+            <h3>2b. Another server: join</h3>
+            <p class="muted">Choose the <code>sm-vault.key</code> from the first server and type the password it was made with. Secrets from the vault are added here; secrets only this server has are uploaded.</p>
+            <label for="sync-join-file">Key file</label>
+            <input id="sync-join-file" type="file" accept=".key,application/json" required>
+            <label for="sync-join-pw">Password of the key file</label>
+            <input id="sync-join-pw" type="password" autocomplete="off" required>
+            <p id="sync-join-error" class="error" role="alert" hidden></p>
+            <div class="row"><button class="primary" type="submit">Join vault</button></div>
+          </form>
+        </div>
+      </div>
+    </section>
+
     <section id="tab-activity" class="page" hidden>
       <div class="page-head">
         <div>
@@ -200,6 +258,20 @@
   </dialog>
 
   <datalist id="category-list"></datalist>
+
+  <dialog id="keyfile-dialog">
+    <form method="dialog" id="keyfile-form">
+      <h3>Download a key file</h3>
+      <p class="muted">A new copy of <code>sm-vault.key</code>, locked with this server's GUI password. Older copies keep working with the password they were made with.</p>
+      <label for="kf-pw">Your GUI password</label>
+      <input id="kf-pw" type="password" autocomplete="current-password" required>
+      <p id="kf-error" class="error" role="alert" hidden></p>
+      <div class="actions">
+        <button type="button" class="ghost" data-close>Cancel</button>
+        <button class="primary" type="submit" value="ok">Download</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="password-dialog">
     <form method="dialog" id="password-form">

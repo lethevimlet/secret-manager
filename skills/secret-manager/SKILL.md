@@ -169,5 +169,9 @@ something that looks like a key, token or password (long random strings,
   to get at secrets or tokens, and never call the sm server's API yourself
   (`/v1/secrets/*/reveal`, `/v1/resolve`): viewing values in the GUI is
   for the user only.
+- The vault key file `sm-vault.key` and the `/v1/vault/*` API are the
+  user's: don't read, copy, move or upload the key file, and don't create,
+  join or export a vault unless the user asks you to. Never ask for its
+  password.
 - Use `-c '…'` with single quotes so `$NAME` is expanded inside `sm`, not by
   your own shell (where it is empty).

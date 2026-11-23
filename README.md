@@ -114,6 +114,7 @@ It's safe to run again (e.g. after `git pull`, or to change the LAN address).
 | `--lan IP` | Also serve HTTPS on this address (server mode). |
 | `--tls-cert F --tls-key F [--tls-ca F]` | Use your own certificate. `--tls-ca` lets other machines download and trust the CA. |
 | `--gen-tls` | Generate a local CA and a certificate for `--lan`. |
+| `--sync-interval MIN` | Minutes between vault syncs (default 5; a re-install keeps the current value). |
 | `--port N` | Port (default 8737). |
 | `--no-service` | Don't install the systemd unit; just print it. |
 | `--client` | Client mode without asking. |
@@ -343,7 +344,7 @@ private git repository, e.g. `sm-vault` on GitHub.
    ```
 
 **How syncing works.** Each server pulls and pushes every 5 minutes
-(`SM_VAULT_INTERVAL`) and a few seconds after any change. Per secret, the
+(`SM_VAULT_INTERVAL` in seconds, or `installer.sh --sync-interval MIN`) and a few seconds after any change. Per secret, the
 newer change wins; when the same secret was changed on two servers since the
 last sync, Activity shows a **sync conflict** naming which server's version was
 kept. Deletions are remembered, so a server that was offline does not bring a

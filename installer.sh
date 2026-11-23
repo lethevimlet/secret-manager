@@ -11,7 +11,7 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODE="" YES=0 SKILL="" GIT="" SERVICE=1 LAN="" CERT="" KEY="" CA="" GEN_TLS=0
-SERVER_URL="" CODE="" CA_FP="" BIN_DIR="" PORT="${SM_PORT:-8737}"
+SERVER_URL="" CODE="" CA_FP="" BIN_DIR="" PORT="${SM_PORT:-8737}" SYNC_MIN=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -26,6 +26,7 @@ while [ $# -gt 0 ]; do
     --tls-ca) CA="$2"; shift ;;
     --gen-tls) GEN_TLS=1 ;;
     --port) PORT="$2"; shift ;;
+    --sync-interval) SYNC_MIN="$2"; shift ;;
     --bin) BIN_DIR="$2"; shift ;;
     --yes|-y) YES=1 ;;
     --no-skill) SKILL=no ;;
@@ -116,6 +117,13 @@ if [ "$MODE" = server ]; then
   ENVLINES="Environment=SM_PORT=$PORT\nEnvironment=SM_SERVER_DATA=$DATA"
   [ -n "$LAN" ] && ENVLINES="$ENVLINES\nEnvironment=SM_LAN_BIND=$LAN\nEnvironment=SM_TLS_CERT=$CERT\nEnvironment=SM_TLS_KEY=$KEY"
   [ -n "$CA" ] && ENVLINES="$ENVLINES\nEnvironment=SM_TLS_CA=$CA"
+  # Vault sync interval: --sync-interval MINUTES, else keep what the existing unit has.
+  if [ -n "$SYNC_MIN" ]; then
+    case "$SYNC_MIN" in *[!0-9]*|'') die "--sync-interval takes whole minutes" ;; esac
+    ENVLINES="$ENVLINES\nEnvironment=SM_VAULT_INTERVAL=$((SYNC_MIN * 60))"
+  elif [ -f /etc/systemd/system/sm-server.service ] && grep -q '^Environment=SM_VAULT_INTERVAL=' /etc/systemd/system/sm-server.service; then
+    ENVLINES="$ENVLINES\n$(grep '^Environment=SM_VAULT_INTERVAL=' /etc/systemd/system/sm-server.service | tail -1)"
+  fi
   UNIT="[Unit]
 Description=sm secret manager (API + GUI)
 Wants=network-online.target

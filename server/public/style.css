@@ -221,3 +221,11 @@ dialog label { margin-top: 14px; }
 .sync-facts dt { color: var(--muted); }
 .sync-facts dd { margin: 0; overflow-wrap: anywhere; }
 #sync-key { width: 100%; font-family: var(--mono, monospace); font-size: 12px; resize: vertical; }
+
+.sync-summary { display: flex; gap: 14px; align-items: center; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.sync-state { flex: none; font-weight: 700; font-size: 14px; padding: 6px 12px; border-radius: 999px; white-space: nowrap; }
+.sync-state.ok { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.sync-state.bad { background: var(--danger-soft); color: var(--danger); }
+.sync-state.busy { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.sync-headline { font-size: 16px; font-weight: 600; }
+@media (max-width: 560px) { .sync-summary { flex-direction: column; align-items: flex-start; } }

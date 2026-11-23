@@ -162,7 +162,8 @@ export class Vault {
     if (!this.configured) return { configured: false };
     const { repo, vaultId, lastSync, lastResult, lastError } = this.state;
     // local = secrets on this server now; lastResult.vault/.local = both counts right after the last sync.
-    return { configured: true, repo, vaultId, device: this.store.device, lastSync, lastResult, lastError: lastError || null, syncing: this.syncing, local: this.store.list().length };
+    const nextSync = this.timerStart ? new Date(this.timerStart + Math.ceil((Date.now() - this.timerStart + 1) / this.intervalMs) * this.intervalMs).toISOString() : null;
+    return { configured: true, repo, vaultId, device: this.store.device, lastSync, lastResult, lastError: lastError || null, syncing: this.syncing, local: this.store.list().length, intervalMs: this.intervalMs, nextSync };
   }
 
   saveState() {
@@ -353,6 +354,7 @@ export class Vault {
       this.debounce = setTimeout(() => this.syncNow('change').catch(() => {}), this.debounceMs);
       this.debounce.unref?.();
     };
+    this.timerStart = Date.now();
     this.timer = setInterval(() => { if (this.configured) this.syncNow('timer').catch(() => {}); }, this.intervalMs);
     this.timer.unref?.();
     if (this.configured) setTimeout(() => this.syncNow('startup').catch(() => {}), 2000).unref?.();

@@ -144,18 +144,26 @@
       </div>
 
       <div id="sync-on" class="card sync-card" hidden>
+        <div class="sync-summary">
+          <span id="sync-state" class="sync-state"></span>
+          <div>
+            <div id="sync-headline" class="sync-headline"></div>
+            <div id="sync-sub" class="muted"></div>
+          </div>
+        </div>
+        <p id="sync-error" class="error" role="alert" hidden></p>
         <dl class="sync-facts">
+          <dt>Secrets here</dt><dd id="sync-local"></dd>
+          <dt>In the vault</dt><dd id="sync-vault"></dd>
+          <dt>Last sync</dt><dd id="sync-last"></dd>
           <dt>Repository</dt><dd><code id="sync-repo"></code></dd>
           <dt>This server</dt><dd id="sync-device"></dd>
-          <dt>Last sync</dt><dd id="sync-last"></dd>
-          <dt>Secrets</dt><dd id="sync-counts"></dd>
         </dl>
-        <p id="sync-error" class="error" role="alert" hidden></p>
         <div class="row">
           <button id="sync-now" class="primary" type="button">Sync now</button>
           <button id="sync-keyfile" class="ghost" type="button">Download a key file</button>
         </div>
-        <p class="muted">Syncs every 5 minutes and a few seconds after every change. When the same secret changed on two servers, the newer change wins and Activity says so.</p>
+        <p id="sync-how" class="muted"></p>
       </div>
 
       <div id="sync-off" hidden>

@@ -712,27 +712,46 @@ function downloadJson(obj, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function inMinutes(iso) {
+  const m = Math.round((Date.parse(iso) - Date.now()) / 60000);
+  return m <= 0 ? 'in under a minute' : m === 1 ? 'in 1 minute' : `in ${m} minutes`;
+}
+const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+
 async function loadSync() {
   let st;
   try { st = await api('/vault'); } catch (err) { if (err.message !== 'unauthorized') toast(err.message, true); return; }
   $('#sync-on').hidden = !st.configured;
   $('#sync-off').hidden = st.configured;
   if (!st.configured) return;
+  const r = st.lastResult;
+  const known = r && r.vault !== undefined;
+  const changedHere = known && st.local !== r.local;
+
+  // Summary: one state and one sentence.
+  let state, cls, headline;
+  if (st.syncing) { state = '⟳ Syncing'; cls = 'busy'; headline = 'Comparing with the vault…'; }
+  else if (st.lastError) { state = '✕ Sync failed'; cls = 'bad'; headline = 'The last sync did not complete (details below).'; }
+  else if (!known) { state = '? Not checked'; cls = 'busy'; headline = 'Press Sync now to compare this server with the vault.'; }
+  else if (changedHere) { state = '⟳ Changes pending'; cls = 'busy'; headline = `Secrets changed here since the last sync; they are uploaded within a few seconds.`; }
+  else if (st.local === r.vault) { state = '✓ In sync'; cls = 'ok'; headline = st.local === 0 ? 'The vault and this server are both empty.' : `All ${plural(st.local, 'secret')} on this server are in the vault.`; }
+  else { state = '! Not in sync'; cls = 'bad'; headline = `${st.local} here but ${r.vault} in the vault. Press Sync now; if it stays different, check Activity.`; }
+  const sync = $('#sync-state');
+  sync.textContent = state;
+  sync.className = `sync-state ${cls}`;
+  $('#sync-headline').textContent = headline;
+  $('#sync-sub').textContent = [st.lastSync ? `Last sync ${ago(st.lastSync)}` : 'Never synced', st.nextSync ? `next ${inMinutes(st.nextSync)}` : null].filter(Boolean).join(' · ');
+
+  $('#sync-local').textContent = String(st.local);
+  $('#sync-vault').textContent = known ? `${r.vault}  (at the last sync)` : '—';
+  $('#sync-last').textContent = !st.lastSync ? 'never'
+    : `${new Date(st.lastSync).toLocaleString()} · ` + (r && (r.pulled || r.pushed)
+      ? `${plural(r.pulled, 'change')} from the vault, ${plural(r.pushed, 'change')} to it${r.conflicts ? `, ${plural(r.conflicts, 'conflict')}` : ''}`
+      : 'nothing needed changing');
   $('#sync-repo').textContent = st.repo;
   $('#sync-device').textContent = st.device;
-  const r = st.lastResult;
-  $('#sync-last').textContent = st.syncing ? 'syncing…' : st.lastSync
-    ? `${ago(st.lastSync)}${r ? ` · ${r.pulled} from the vault, ${r.pushed} to it${r.conflicts ? `, ${r.conflicts} conflict(s)` : ''}` : ''}`
-    : 'never';
-  const counts = $('#sync-counts');
-  counts.replaceChildren();
-  if (r && r.vault !== undefined) {
-    const same = st.local === r.vault;
-    counts.append(`${st.local} here · ${r.vault} in the vault `,
-      el('span', { class: same ? 'badge change' : 'badge delete' }, same ? 'in sync' : st.local !== r.local ? 'changed here, syncing soon' : 'different'));
-  } else {
-    counts.textContent = `${st.local} here · vault count after the next sync`;
-  }
+  const mins = Math.round((st.intervalMs || 0) / 60000);
+  $('#sync-how').textContent = `Syncs every ${plural(mins, 'minute')} and a few seconds after every change here. When the same secret changed on two servers, the newer change wins and Activity says so.`;
   showError('#sync-error', st.lastError ? `Last sync failed: ${st.lastError}` : '');
 }
 
@@ -740,7 +759,7 @@ $('#sync-now').addEventListener('click', async (ev) => {
   ev.target.disabled = true;
   try {
     const { result } = await api('/vault/sync', { method: 'POST' });
-    toast(`Synced: ${result.pulled} from the vault, ${result.pushed} to it`);
+    toast(result.pulled || result.pushed ? `Synced: ${result.pulled} from the vault, ${result.pushed} to it` : `Synced: already up to date (${result.vault} in the vault)`);
   } catch (err) { toast(err.message, true); }
   ev.target.disabled = false;
   loadSync();

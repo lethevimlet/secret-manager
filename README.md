@@ -318,14 +318,21 @@ private git repository, e.g. `sm-vault` on GitHub.
 
 **Set up** (GUI: **Sync** tab; or the commands below)
 
-1. Create an empty **private** repository, e.g. `sm-vault`.
-2. On each server, get its deploy key and add it to the repository under
-   *Settings › Deploy keys* with **write access**. Every server has its own
-   key, so one machine can be revoked without touching the others.
+1. Create an empty **private** repository, e.g. `sm-vault` (no README or
+   licence, so it stays empty).
+2. On each server, get its deploy key (GUI: *Show this server's deploy key*):
 
    ```bash
    smctl sync deploy-key
    ```
+
+   It prints one line like `ssh-ed25519 AAAAC3Nz… sm-vault@code`. In the
+   repository open *Settings › Deploy keys › Add deploy key*, give it a title
+   (e.g. the server's name), paste **the whole line** (key type, key and the
+   `sm-vault@…` label) and tick **Allow write access**: without it the server
+   can read but not upload. Every server has its own key, so one machine can
+   be revoked without touching the others. This is the public half; the
+   private half never leaves the server.
 
 3. **First server:** create the vault. Every secret on this server is
    uploaded, and `sm-vault.key` is written (asks for the GUI password).
@@ -333,6 +340,10 @@ private git repository, e.g. `sm-vault` on GitHub.
    ```bash
    smctl sync init --repo git@github.com:you/sm-vault.git
    ```
+
+   Deploy keys work over SSH only; the `https://github.com/you/sm-vault`
+   address GitHub shows by default is accepted and converted. In the GUI the
+   key file is downloaded by the browser. Keep it, plus one copy offline.
 
 4. **Every other server:** copy `sm-vault.key` over and join (asks for the
    password the key file was made with). Secrets from the vault are added;
@@ -343,9 +354,30 @@ private git repository, e.g. `sm-vault` on GitHub.
    smctl sync join --key-file sm-vault.key
    ```
 
+**Checking it.** The Sync tab opens with one state and a sentence, e.g.
+**✓ In sync**: *All 16 secrets on this server are in the vault*, with the last
+and next sync. Below it: secrets here, secrets in the vault (as counted at the
+last sync, deletions not counted), and what the last sync changed. Other
+states: **Changes pending** (changed here, uploaded within seconds), **Not in
+sync** (counts differ: press *Sync now*, then check Activity) and **Sync
+failed** (with git's message). `smctl sync` prints the same:
+
+```
+repo:       git@github.com:you/sm-vault.git
+device:     code
+last sync:  2026-11-23 02:39:51  (pulled 0, pushed 0, conflicts 0)
+secrets:    16 here, 16 in the vault  (in sync)
+```
+
+A sync that reports *0 from the vault, 0 to it* is normal: nothing had
+changed. The first sync after `init` uploads everything.
+
 **How syncing works.** Each server pulls and pushes every 5 minutes
-(`SM_VAULT_INTERVAL` in seconds, or `installer.sh --sync-interval MIN`) and a few seconds after any change. Per secret, the
-newer change wins; when the same secret was changed on two servers since the
+(`SM_VAULT_INTERVAL` in seconds, or `installer.sh --sync-interval MIN`) and a
+few seconds after any change here, so the interval only decides how quickly
+*other* servers' changes arrive. The traffic is small: one `git fetch` per
+interval, a push only when something changed. Per secret, the newer change
+wins; when the same secret was changed on two servers since the
 last sync, Activity shows a **sync conflict** naming which server's version was
 kept. Deletions are remembered, so a server that was offline does not bring a
 deleted secret back; re-creating the secret later is a newer change and syncs
@@ -520,6 +552,11 @@ what is and isn't caught.
 | `wrong or expired pairing code` | Codes are single use and last 10 minutes: run `smctl pair` again. |
 | `CA fingerprint mismatch` | You're not talking to your server, or it has a new certificate: compare with `smctl pair`. |
 | Variable is empty inside `sm -c "…"` | Use single quotes: `sm -c '… $NAME …'`. |
+| Sync: *"deploy keys don't work over HTTPS"* / *"could not read Username"* | Use the SSH address `git@github.com:you/sm-vault.git` (current versions convert `https://github.com/…` themselves). |
+| Sync: *"can't reach the repository"* / `Permission denied (publickey)` | Add the server's deploy key (`smctl sync deploy-key`) to that repository. |
+| Sync: *"the deploy key has no write access"* | Tick *Allow write access* on the deploy key in the repository settings. |
+| Sync: *"wrong password for this key file"* | Use the password the key file was made with (the GUI password at the time of `init` or `key-file`). |
+| Sync: *"this key file belongs to a different vault"* | The key file is from another vault repository: use the one made for this repository. |
 | GUI says *"value must be a non-empty string"* right after an update | The browser has new files but the server still runs old code: `systemctl restart sm-server`. |
 
 ---

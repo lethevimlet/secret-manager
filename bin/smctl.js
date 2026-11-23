@@ -237,8 +237,11 @@ function printVault(st) {
     return;
   }
   const r = st.lastResult;
+  const counts = r && r.vault !== undefined
+    ? `secrets:    ${st.local} here, ${r.vault} in the vault` + (st.local === r.vault ? '  (in sync)' : `  (DIFFERENT${st.local !== r.local ? ': changed here since the last sync' : ''})`) + '\n'
+    : '';
   process.stdout.write(`repo:       ${st.repo}\ndevice:     ${st.device}\nlast sync:  ${fmtTime(st.lastSync)}` +
-    (r ? `  (pulled ${r.pulled}, pushed ${r.pushed}, conflicts ${r.conflicts})` : '') + '\n' +
+    (r ? `  (pulled ${r.pulled}, pushed ${r.pushed}, conflicts ${r.conflicts})` : '') + '\n' + counts +
     (st.lastError ? `last error: ${st.lastError}\n` : ''));
 }
 

@@ -724,6 +724,15 @@ async function loadSync() {
   $('#sync-last').textContent = st.syncing ? 'syncing…' : st.lastSync
     ? `${ago(st.lastSync)}${r ? ` · ${r.pulled} from the vault, ${r.pushed} to it${r.conflicts ? `, ${r.conflicts} conflict(s)` : ''}` : ''}`
     : 'never';
+  const counts = $('#sync-counts');
+  counts.replaceChildren();
+  if (r && r.vault !== undefined) {
+    const same = st.local === r.vault;
+    counts.append(`${st.local} here · ${r.vault} in the vault `,
+      el('span', { class: same ? 'badge change' : 'badge delete' }, same ? 'in sync' : st.local !== r.local ? 'changed here, syncing soon' : 'different'));
+  } else {
+    counts.textContent = `${st.local} here · vault count after the next sync`;
+  }
   showError('#sync-error', st.lastError ? `Last sync failed: ${st.lastError}` : '');
 }
 

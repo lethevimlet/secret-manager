@@ -219,3 +219,34 @@ test('an unreachable repository is a readable 400, not an internal error', async
     t.cleanup();
   }
 });
+
+test('status reports how many secrets are here and in the vault', async () => {
+  const t = setup();
+  try {
+    const a = t.server('alpha');
+    a.store.set('ONE', 'one-value');
+    a.store.set('TWO', 'two-value');
+    await a.vault.init({ repo: t.repo, password: PASSWORD });
+    let st = a.vault.status();
+    assert.equal(st.local, 2);
+    assert.equal(st.lastResult.vault, 2);
+    await a.vault.syncNow(); // nothing to do: counts still reported
+    assert.equal(a.vault.status().lastResult.vault, 2);
+
+    const b = t.server('beta');
+    b.store.set('THREE', 'three-value');
+    await b.vault.join({ keyFile: await a.vault.exportKeyFile(PASSWORD), password: PASSWORD });
+    assert.equal(b.vault.status().lastResult.vault, 3);
+
+    await sleep(5);
+    a.store.remove('ONE');
+    st = a.vault.status();
+    assert.equal(st.local, 1); // changed here, not synced yet
+    await a.vault.syncNow();
+    st = a.vault.status();
+    assert.equal(st.local, 2); // THREE pulled, ONE deleted
+    assert.equal(st.lastResult.vault, 2);
+  } finally {
+    t.cleanup();
+  }
+});

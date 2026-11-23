@@ -161,7 +161,8 @@ export class Vault {
   status() {
     if (!this.configured) return { configured: false };
     const { repo, vaultId, lastSync, lastResult, lastError } = this.state;
-    return { configured: true, repo, vaultId, device: this.store.device, lastSync, lastResult, lastError: lastError || null, syncing: this.syncing };
+    // local = secrets on this server now; lastResult.vault/.local = both counts right after the last sync.
+    return { configured: true, repo, vaultId, device: this.store.device, lastSync, lastResult, lastError: lastError || null, syncing: this.syncing, local: this.store.list().length };
   }
 
   saveState() {
@@ -287,18 +288,23 @@ export class Vault {
           remote.set(e.name, e);
         }
         const names = new Set([...remote.keys(), ...this.store.syncNames()]);
+        result.vault = 0; // secrets (not deletions) in the vault once this cycle is pushed
         for (const name of names) {
           const local = this.store.syncEntry(name);
           const rem = remote.get(name);
           let winner;
           if (!rem) winner = local;
           else if (!local) winner = rem;
-          else if (sameVersion(local, rem)) continue;
+          else if (sameVersion(local, rem)) {
+            if (!rem.deleted) result.vault++;
+            continue;
+          }
           else {
             winner = newer(local, rem);
             const both = Date.parse(local.changedAt) > lastSync && Date.parse(rem.changedAt) > lastSync && local.changedBy !== rem.changedBy;
             if (both) result.conflicts.push({ name, kept: winner.changedBy, lost: (winner === local ? rem : local).changedBy });
           }
+          if (!winner.deleted) result.vault++;
           if (winner === local) {
             fs.writeFileSync(path.join(secretsDir, entryFileName(this.vaultKey, name)), JSON.stringify(sealEntry(this.vaultKey, this.state.vaultId, local)) + '\n');
             result.pushed++;
@@ -316,7 +322,7 @@ export class Vault {
         // Another server pushed in between: start over from its state.
       }
       this.state.lastSync = new Date().toISOString();
-      this.state.lastResult = { pulled: result.pulled, pushed: result.pushed, conflicts: result.conflicts.length };
+      this.state.lastResult = { pulled: result.pulled, pushed: result.pushed, conflicts: result.conflicts.length, vault: result.vault, local: this.store.list().length };
       this.state.lastError = null;
       this.saveState();
       if (this.audit) {

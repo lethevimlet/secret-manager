@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
+    <img src="assets/logo-light.png" alt="secret-manager" width="420">
+  </picture>
+</p>
+
 # sm: secrets for AI agents, without showing them
 
 `sm` lets AI coding agents (Claude Code, opencode, …) and you use API keys,

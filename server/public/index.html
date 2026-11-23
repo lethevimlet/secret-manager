@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>sm · Secrets</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23256f5c'/%3E%3Cpath d='M11 14v-3a5 5 0 0 1 10 0v3' fill='none' stroke='white' stroke-width='2.5'/%3E%3Crect x='8' y='14' width='16' height='11' rx='2' fill='white'/%3E%3C/svg%3E">
+  <title>secret-manager</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8.5' fill='%234fb596'/%3E%3Cpath d='M11 14v-3a5 5 0 0 1 10 0v3' fill='none' stroke='white' stroke-width='2.5'/%3E%3Crect x='8' y='14' width='16' height='11' rx='2' fill='white'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="style.css">
   <script type="module" src="app.js"></script>
 </head>
@@ -12,8 +12,8 @@
   <!-- Sign in -->
   <main id="login" class="login" hidden>
     <form id="login-form" class="card login-card" hidden>
-      <div class="brand"><span class="logo" aria-hidden="true"></span><span>sm</span></div>
-      <h1>Secret manager</h1>
+      <img class="login-logo" src="logo.png" alt="secret-manager">
+      <h1>Sign in</h1>
       <p class="muted">Enter your password.</p>
       <label for="password">Password</label>
       <input id="password" type="password" autocomplete="current-password" required>
@@ -23,7 +23,7 @@
     </form>
 
     <form id="setup-form" class="card login-card" hidden>
-      <div class="brand"><span class="logo" aria-hidden="true"></span><span>sm</span></div>
+      <img class="login-logo" src="logo.png" alt="secret-manager">
       <h1>Set a password</h1>
       <p class="muted">This server has no password yet. Choose one to protect the secret manager; it is stored only as a salted scrypt hash.</p>
       <label for="setup-password">New password</label>
@@ -44,7 +44,7 @@
   <!-- App -->
   <div id="app" hidden>
     <header class="topbar">
-      <div class="brand"><span class="logo" aria-hidden="true"></span><span>sm</span></div>
+      <div class="brand"><img class="brand-logo" src="logo.png" alt="secret-manager"><span class="logo brand-mark" role="img" aria-label="secret-manager"></span></div>
       <nav class="tabs" role="tablist">
         <button role="tab" data-tab="secrets" aria-selected="true">Secrets</button>
         <button role="tab" data-tab="activity" aria-selected="false">Activity</button>

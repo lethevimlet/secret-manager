@@ -106,7 +106,7 @@ test('GUI is served with a strict CSP', async () => {
   const res = await fetch(base + '/');
   assert.equal(res.status, 200);
   assert.match(res.headers.get('content-security-policy'), /default-src 'self'/);
-  assert.match(await res.text(), /Secret manager/);
+  assert.match(await res.text(), /<title>secret-manager<\/title>/);
 });
 
 test('SM_NO_AUTH: manage without a token, values still need one', async () => {

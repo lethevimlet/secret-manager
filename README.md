@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
-    <img src="assets/logo-light.png" alt="secret-manager" width="420">
-  </picture>
+  <img src="assets/logo.png" alt="secret-manager" width="440">
 </p>
 
 # sm: secrets for AI agents, without showing them

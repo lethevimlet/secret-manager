@@ -11,6 +11,36 @@ import path from 'node:path';
 export const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 export const MAX_VALUE_BYTES = 64 * 1024;
 
+// Scopes group secrets so a shell gets only some of them (sm -s work). The
+// default scope is '' (shown as "Default"). A secret is identified by scope +
+// name, stored under the key "scope/NAME"; default-scope secrets keep the plain
+// NAME key, so stores and vaults from before scopes stay valid.
+export const SCOPE_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+export const DEFAULT_SCOPE = '';
+
+export function cleanScope(s) {
+  if (s === undefined || s === null) return DEFAULT_SCOPE;
+  if (typeof s !== 'string') throw Object.assign(new Error('scope must be a string'), { status: 400 });
+  const v = s.trim().toLowerCase();
+  if (v === '' || v === 'default') return DEFAULT_SCOPE;
+  if (!SCOPE_RE.test(v)) throw Object.assign(new Error(`invalid scope "${s}": lowercase letters, digits, _ and -, at most 32`), { status: 400 });
+  return v;
+}
+
+export const keyOf = (name, scope = DEFAULT_SCOPE) => (scope ? `${scope}/${name}` : name);
+
+export function splitKey(key) {
+  const i = key.indexOf('/');
+  return i === -1 ? { scope: DEFAULT_SCOPE, name: key } : { scope: key.slice(0, i), name: key.slice(i + 1) };
+}
+
+export function validKey(key) {
+  const { scope, name } = splitKey(String(key));
+  return NAME_RE.test(name) && (scope === DEFAULT_SCOPE || SCOPE_RE.test(scope));
+}
+
+const badName = () => Object.assign(new Error('invalid name: letters, digits and _, not starting with a digit'), { status: 400 });
+
 // '' = uncategorized. Trimmed, collapsed spaces, at most 40 characters.
 export function cleanCategory(c) {
   if (c === undefined || c === null) return undefined;
@@ -95,23 +125,30 @@ export class SecretStore {
   // Metadata only, never values.
   list() {
     return Object.entries(this.data)
-      .map(([name, s]) => ({ name, category: s.category || '', note: s.note || '', createdAt: s.createdAt, updatedAt: s.updatedAt, lastUsedAt: s.lastUsedAt || null, uses: s.uses || 0 }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .map(([key, s]) => ({ ...splitKey(key), category: s.category || '', note: s.note || '', createdAt: s.createdAt, updatedAt: s.updatedAt, lastUsedAt: s.lastUsedAt || null, uses: s.uses || 0 }))
+      .sort((a, b) => a.scope.localeCompare(b.scope) || a.name.localeCompare(b.name));
   }
 
-  has(name) {
-    return Object.hasOwn(this.data, name);
+  // Scopes that hold at least one secret, besides the default one.
+  scopes() {
+    return [...new Set(Object.keys(this.data).map((k) => splitKey(k).scope))].filter(Boolean).sort();
   }
 
-  set(name, value, note, category) {
-    if (!NAME_RE.test(name)) throw Object.assign(new Error('invalid name: letters, digits and _, not starting with a digit'), { status: 400 });
+  has(name, scope = DEFAULT_SCOPE) {
+    return Object.hasOwn(this.data, keyOf(name, cleanScope(scope)));
+  }
+
+  set(name, value, note, category, scope = DEFAULT_SCOPE) {
+    if (!NAME_RE.test(name)) throw badName();
+    scope = cleanScope(scope);
+    const key = keyOf(name, scope);
     if (typeof value !== 'string' || value === '') throw Object.assign(new Error('value must be a non-empty string'), { status: 400 });
     if (Buffer.byteLength(value) > MAX_VALUE_BYTES) throw Object.assign(new Error('value too large'), { status: 400 });
     const cat = cleanCategory(category);
     const now = new Date().toISOString();
-    const prev = this.data[name];
-    this.data[name] = {
-      ...this.encrypt(name, value),
+    const prev = this.data[key];
+    this.data[key] = {
+      ...this.encrypt(key, value),
       category: cat ?? prev?.category ?? '',
       note: typeof note === 'string' ? note.slice(0, 200) : prev?.note || '',
       createdAt: prev?.createdAt || now,
@@ -122,21 +159,38 @@ export class SecretStore {
       changedBy: this.device,
     };
     this.save();
-    if (this.tombstones[name]) { delete this.tombstones[name]; this.saveTombstones(); }
-    this.changed(name);
+    if (this.tombstones[key]) { delete this.tombstones[key]; this.saveTombstones(); }
+    this.changed(key);
     return !prev;
   }
 
-  // Change metadata (note and/or category) without touching the value.
-  update(name, { note, category }) {
-    if (!this.has(name)) return false;
+  // Change metadata (note, category) without touching the value, and/or move
+  // the secret to another scope (`to`).
+  update(name, { note, category, to }, scope = DEFAULT_SCOPE) {
+    scope = cleanScope(scope);
+    let key = keyOf(name, scope);
+    if (!Object.hasOwn(this.data, key)) return false;
     const cat = cleanCategory(category);
-    if (cat !== undefined) this.data[name].category = cat;
-    if (note !== undefined) this.data[name].note = String(note).slice(0, 200);
-    this.data[name].changedAt = new Date().toISOString();
-    this.data[name].changedBy = this.device;
+    const now = new Date().toISOString();
+    if (to !== undefined && cleanScope(to) !== scope) {
+      const newKey = keyOf(name, cleanScope(to));
+      if (Object.hasOwn(this.data, newKey)) throw Object.assign(new Error(`${name} already exists in scope ${cleanScope(to) || 'default'}`), { status: 409 });
+      // The key is the encryption's associated data: re-encrypt under the new one.
+      const value = this.decrypt(key, this.data[key]);
+      this.data[newKey] = { ...this.data[key], ...this.encrypt(newKey, value) };
+      delete this.data[key];
+      this.tombstones[key] = { changedAt: now, changedBy: this.device };
+      delete this.tombstones[newKey];
+      this.saveTombstones();
+      this.changed(key);
+      key = newKey;
+    }
+    if (cat !== undefined) this.data[key].category = cat;
+    if (note !== undefined) this.data[key].note = String(note).slice(0, 200);
+    this.data[key].changedAt = now;
+    this.data[key].changedBy = this.device;
     this.save();
-    this.changed(name);
+    this.changed(key);
     return true;
   }
 
@@ -144,19 +198,30 @@ export class SecretStore {
     return [...new Set(Object.values(this.data).map((s) => s.category || ''))].filter(Boolean).sort((a, b) => a.localeCompare(b));
   }
 
-  remove(name) {
-    if (!this.has(name)) return false;
-    delete this.data[name];
+  remove(name, scope = DEFAULT_SCOPE) {
+    const key = keyOf(name, cleanScope(scope));
+    if (!Object.hasOwn(this.data, key)) return false;
+    delete this.data[key];
     this.save();
-    this.tombstones[name] = { changedAt: new Date().toISOString(), changedBy: this.device };
+    this.tombstones[key] = { changedAt: new Date().toISOString(), changedBy: this.device };
     this.saveTombstones();
-    this.changed(name);
+    this.changed(key);
     return true;
   }
 
   // ---- vault sync ----
 
-  // Every name this store knows, live or deleted.
+  // Delete a scope and every secret in it. Returns the deleted names.
+  removeScope(scope) {
+    scope = cleanScope(scope);
+    if (!scope) throw Object.assign(new Error('the default scope cannot be deleted'), { status: 400 });
+    const names = Object.keys(this.data).map(splitKey).filter((k) => k.scope === scope).map((k) => k.name).sort();
+    for (const n of names) this.remove(n, scope);
+    return names;
+  }
+
+  // Sync works on keys ("scope/NAME", or NAME in the default scope): every key
+  // this store knows, live or deleted.
   syncNames() {
     return [...new Set([...Object.keys(this.data), ...Object.keys(this.tombstones)])];
   }
@@ -183,7 +248,7 @@ export class SecretStore {
       this.saveTombstones();
       return;
     }
-    if (!NAME_RE.test(e.name) || typeof e.value !== 'string' || !e.value) throw new Error(`invalid synced entry ${e.name}`);
+    if (!validKey(e.name) || typeof e.value !== 'string' || !e.value) throw new Error(`invalid synced entry ${e.name}`);
     const prev = this.data[e.name];
     this.data[e.name] = {
       ...this.encrypt(e.name, e.value),
@@ -217,20 +282,38 @@ export class SecretStore {
   }
 
   // One value, for the owner viewing it in the GUI. Not counted as a use.
-  reveal(name) {
-    return this.has(name) ? this.decrypt(name, this.data[name]) : null;
+  reveal(name, scope = DEFAULT_SCOPE) {
+    const key = keyOf(name, cleanScope(scope));
+    return Object.hasOwn(this.data, key) ? this.decrypt(key, this.data[key]) : null;
   }
 
-  // All values, for the sm shell. Marks them as used.
-  resolveAll() {
-    const out = {};
+  // The values of the given scopes, for the sm shell; marks them as used.
+  // A name in several scopes takes the value of the last scope listed
+  // (reported in `overridden`). `empty` = requested scopes with no secrets.
+  resolve(scopes = [DEFAULT_SCOPE]) {
+    const list = [...new Set(scopes.map(cleanScope))];
+    const secrets = Object.create(null);
+    const from = new Map(); // name -> scope it came from
+    const overridden = [];
     const now = new Date().toISOString();
-    for (const [name, s] of Object.entries(this.data)) {
-      out[name] = this.decrypt(name, s);
-      s.lastUsedAt = now;
-      s.uses = (s.uses || 0) + 1;
+    for (const scope of list) {
+      for (const [key, s] of Object.entries(this.data)) {
+        const k = splitKey(key);
+        if (k.scope !== scope) continue;
+        if (from.has(k.name)) overridden.push({ name: k.name, scope: from.get(k.name), by: scope });
+        secrets[k.name] = this.decrypt(key, s);
+        from.set(k.name, scope);
+        s.lastUsedAt = now;
+        s.uses = (s.uses || 0) + 1;
+      }
     }
-    if (Object.keys(out).length) this.save();
-    return out;
+    if (Object.keys(secrets).length) this.save();
+    const used = new Set(from.values());
+    return { secrets, scopes: list, overridden, empty: list.filter((s) => !used.has(s)) };
+  }
+
+  // All scopes at once (the old behaviour; only for tests and tools).
+  resolveAll() {
+    return this.resolve(['', ...this.scopes()]).secrets;
   }
 }

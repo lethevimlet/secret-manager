@@ -196,12 +196,131 @@ const collapsed = new Set(JSON.parse(load('sm.collapsed') || '[]'));
 function load(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function store(k, v) { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} }
 
+// ---------- scopes ----------
+// Each scope is a tab; '' = Default. Scopes exist on the server only while they
+// hold a secret, so a new empty one is remembered in this browser until then.
+const SCOPE_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+let serverScopes = [];
+let scopesLoaded = false;
+let extraScopes = JSON.parse(load('sm.extraScopes') || '[]').filter((x) => SCOPE_RE.test(x));
+let activeScope = load('sm.scope') ?? '';
+const scopeLabel = (scope) => scope || 'Default';
+const allScopes = () => ['', ...[...new Set([...serverScopes, ...extraScopes])].sort()];
+const inScope = () => secrets.filter((s) => s.scope === activeScope);
+const sid = (s) => `${s.scope}/${s.name}`; // a secret's identity: scope + name
+const secretPath = (s, suffix = '') => `/secrets/${encodeURIComponent(s.name)}${suffix}${s.scope ? `?scope=${encodeURIComponent(s.scope)}` : ''}`;
+const named = (s) => (s.scope ? `${s.name} (${s.scope})` : s.name);
+
+function setScope(scope) {
+  if (scope === activeScope) return;
+  hideAllValues();
+  activeScope = scope;
+  store('sm.scope', scope);
+  activeCategory = null;
+  store('sm.category', null);
+  renderSecrets();
+}
+
+function renderScopes() {
+  if (scopesLoaded && !allScopes().includes(activeScope)) activeScope = '';
+  const counts = new Map();
+  for (const s of secrets) counts.set(s.scope, (counts.get(s.scope) || 0) + 1);
+  const tab = (scope) => {
+    const n = counts.get(scope) || 0;
+    return el('button', { class: 'scope-tab', role: 'tab', 'aria-selected': String(scope === activeScope), onclick: () => setScope(scope) },
+      el('span', { class: scope ? '' : 'default' }, scopeLabel(scope)), el('span', { class: 'n' }, String(n)));
+  };
+  $('#scope-tabs').replaceChildren(
+    ...allScopes().map(tab),
+    el('button', { class: 'scope-tab new', onclick: openNewScope, title: 'Create a scope' }, '+ New scope'),
+  );
+  $('#scope-hint').replaceChildren(...(activeScope
+    ? ['Only shells started with this scope get these: ', el('code', {}, `sm -s ${activeScope}`), ' (several: ', el('code', {}, `sm -s ${activeScope},other`), '). ',
+      el('button', { class: 'link danger-text scope-delete', onclick: () => openScopeDelete(activeScope) }, 'Delete scope…')]
+    : ['Plain ', el('code', {}, 'sm'), ' gets these. Add them to a scoped shell with ', el('code', {}, 'sm -s default,work'), '.']));
+  $('#add-scope').textContent = scopeLabel(activeScope);
+}
+
+const scopeDialog = $('#scope-dialog');
+function openNewScope() {
+  $('#scope-form').reset();
+  showError('#scope-error');
+  scopeDialog.showModal();
+  $('#scope-name').focus();
+}
+$('#scope-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const name = $('#scope-name').value.trim().toLowerCase();
+  if (name === 'default') return showError('#scope-error', 'Default already exists: it is the first tab.');
+  if (!SCOPE_RE.test(name)) return showError('#scope-error', 'Use lowercase letters, digits, _ and - (at most 32, starting with a letter or digit).');
+  if (!allScopes().includes(name)) {
+    extraScopes.push(name);
+    store('sm.extraScopes', JSON.stringify(extraScopes));
+  }
+  scopeDialog.close();
+  activeScope = null; // force the switch below to re-render
+  setScope(name);
+  addForm.hidden = false;
+  $('#add-name').focus();
+});
+
+// Deleting a scope deletes its secrets too: never one click. An empty scope
+// just needs a confirmation; one with secrets needs its name typed.
+const scopeDeleteDialog = $('#scope-delete-dialog');
+let scopeDeleteTarget = null;
+const sdCount = () => secrets.filter((s) => s.scope === scopeDeleteTarget).length;
+function sdUpdate() {
+  $('#sd-submit').disabled = sdCount() > 0 && $('#sd-confirm').value.trim().toLowerCase() !== scopeDeleteTarget;
+}
+function openScopeDelete(scope) {
+  scopeDeleteTarget = scope;
+  const list = secrets.filter((s) => s.scope === scope).map((s) => s.name).sort();
+  $('#scope-delete-form').reset();
+  showError('#sd-error');
+  $('#sd-name').textContent = scope;
+  $('#sd-name2').textContent = scope;
+  $('#sd-empty').hidden = list.length > 0;
+  $('#sd-full').hidden = list.length === 0;
+  $('#sd-count').textContent = `${list.length} secret${list.length === 1 ? '' : 's'}`;
+  $('#sd-list').replaceChildren(...list.flatMap((n, i) => [i ? ', ' : '', el('code', {}, n)]));
+  $('#sd-submit').textContent = list.length ? 'Delete scope and secrets' : 'Remove scope';
+  sdUpdate();
+  scopeDeleteDialog.showModal();
+  (list.length ? $('#sd-confirm') : $('#scope-delete-form .ghost')).focus();
+}
+$('#sd-confirm').addEventListener('input', sdUpdate);
+$('#scope-delete-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const scope = scopeDeleteTarget;
+  try {
+    if (sdCount()) {
+      const r = await api(`/scopes/${encodeURIComponent(scope)}/delete`, { method: 'POST', body: { confirm: $('#sd-confirm').value } });
+      hideAllValues();
+      toast(`Scope ${scope} and ${r.names.length} secret${r.names.length === 1 ? '' : 's'} deleted`);
+    } else toast(`Scope ${scope} removed`);
+    extraScopes = extraScopes.filter((x) => x !== scope);
+    store('sm.extraScopes', JSON.stringify(extraScopes));
+    serverScopes = serverScopes.filter((x) => x !== scope);
+    scopeDeleteDialog.close();
+    setScope('');
+    loadSecrets();
+  } catch (err) {
+    showError('#sd-error', err.message);
+  }
+});
+scopeDeleteDialog.addEventListener('close', () => ($('#sd-confirm').value = ''));
+
 async function loadSecrets() {
   try {
     const data = await api('/secrets');
-    secrets = data.secrets;
-    categories = data.categories;
-    $('#category-list').replaceChildren(...categories.map((c) => el('option', { value: c })));
+    secrets = data.secrets.map((s) => ({ ...s, scope: s.scope || '' }));
+    serverScopes = data.scopes || [];
+    scopesLoaded = true;
+    // A scope created here now exists on the server: no need to remember it.
+    const before = extraScopes.length;
+    extraScopes = extraScopes.filter((x) => !serverScopes.includes(x));
+    if (extraScopes.length !== before) store('sm.extraScopes', JSON.stringify(extraScopes));
+    $('#category-list').replaceChildren(...data.categories.map((c) => el('option', { value: c })));
     renderSecrets();
   } catch (err) {
     if (err.message !== 'unauthorized') toast(err.message, true);
@@ -225,10 +344,10 @@ function highlight(text, q) {
 const keyOf = (s) => s.category || UNCAT;
 const matches = (s, q) => !q || s.name.toLowerCase().includes(q) || s.note.toLowerCase().includes(q) || s.category.toLowerCase().includes(q);
 
-function renderChips(searched) {
+function renderChips(searched, base) {
   const counts = new Map();
   for (const s of searched) counts.set(keyOf(s), (counts.get(keyOf(s)) || 0) + 1);
-  const keys = [...categories, ...(secrets.some((s) => !s.category) ? [UNCAT] : [])];
+  const keys = [...categories, ...(base.some((s) => !s.category) ? [UNCAT] : [])];
   if (activeCategory !== null && !keys.includes(activeCategory)) activeCategory = null;
   const chip = (key, label, n) =>
     el('button', {
@@ -245,13 +364,13 @@ function renderChips(searched) {
 
 // ---------- viewing values ----------
 const REVEAL_MS = 30000;
-const revealed = new Map(); // name -> { value, timer }
+const revealed = new Map(); // sid (scope/name) -> { value, timer }
 
-function hideValue(name) {
-  const r = revealed.get(name);
+function hideValue(s) {
+  const r = revealed.get(sid(s));
   if (!r) return;
   clearTimeout(r.timer);
-  revealed.delete(name);
+  revealed.delete(sid(s));
   renderSecrets();
 }
 function hideAllValues() {
@@ -264,23 +383,23 @@ function hideAllValues() {
 document.addEventListener('visibilitychange', () => document.hidden && hideAllValues());
 
 // Show the current value (after rotating/generating), replacing an older one on screen.
-async function revealFresh(name) {
-  const r = revealed.get(name);
+async function revealFresh(s) {
+  const r = revealed.get(sid(s));
   if (r) {
     clearTimeout(r.timer);
-    revealed.delete(name);
+    revealed.delete(sid(s));
   }
-  await showValue(name);
+  await showValue(s);
 }
 
-async function showValue(name) {
-  if (revealed.has(name)) return hideValue(name);
+async function showValue(s) {
+  if (revealed.has(sid(s))) return hideValue(s);
   try {
-    const { value } = await api(`/secrets/${encodeURIComponent(name)}/reveal`, { method: 'POST', probe: true });
-    revealed.set(name, { value, timer: setTimeout(() => hideValue(name), REVEAL_MS) });
+    const { value } = await api(secretPath(s, '/reveal'), { method: 'POST', probe: true });
+    revealed.set(sid(s), { value, timer: setTimeout(() => hideValue(s), REVEAL_MS) });
     renderSecrets();
   } catch (err) {
-    if (/admin token/.test(err.message)) return askAdminToken(() => showValue(name));
+    if (/admin token/.test(err.message)) return askAdminToken(() => showValue(s));
     toast(err.message, true);
   }
 }
@@ -296,8 +415,9 @@ async function copyText(value, selectEl) {
   }
 }
 
-function revealRow(name) {
-  const { value } = revealed.get(name);
+function revealRow(s) {
+  const { name } = s;
+  const { value } = revealed.get(sid(s));
   const code = el('code', { class: 'secret-value' }, value);
   return el('tr', { class: 'reveal-row' },
     el('td', { colspan: '6' },
@@ -305,7 +425,7 @@ function revealRow(name) {
         code,
         el('div', { class: 'reveal-actions' },
           el('button', { class: 'small', onclick: async () => (await copyText(value, code)) && toast(`${name} copied`) }, 'Copy'),
-          el('button', { class: 'small ghost', onclick: () => hideValue(name) }, 'Hide'),
+          el('button', { class: 'small ghost', onclick: () => hideValue(s) }, 'Hide'),
           el('span', { class: 'muted' }, 'Hides after 30 s'),
         ),
       ),
@@ -342,29 +462,33 @@ tokenDialog.addEventListener('close', () => ($('#admin-token').value = ''));
 function secretRow(s, q) {
   return el('tr', {},
     el('td', { class: 'name' }, highlight(s.name, q)),
-    el('td', { class: 'note' }, el('button', { class: 'link', title: 'Edit category and note', onclick: () => openEdit(s) }, s.note ? highlight(s.note, q) : '+ add note')),
+    el('td', { class: 'note' }, el('button', { class: 'link', title: 'Edit scope, category and note', onclick: () => openEdit(s) }, s.note ? highlight(s.note, q) : '+ add note')),
     el('td', { class: 'when', title: fullTime(s.updatedAt) }, ago(s.updatedAt)),
     el('td', { class: 'when', title: fullTime(s.lastUsedAt) }, ago(s.lastUsedAt)),
     el('td', { class: 'num' }, String(s.uses)),
     el('td', { class: 'row-actions' },
-      el('button', { class: 'link', 'aria-expanded': String(revealed.has(s.name)), onclick: () => showValue(s.name) }, revealed.has(s.name) ? 'Hide' : 'Show'),
+      el('button', { class: 'link', 'aria-expanded': String(revealed.has(sid(s))), onclick: () => showValue(s) }, revealed.has(sid(s)) ? 'Hide' : 'Show'),
       el('button', { class: 'link', onclick: () => openEdit(s) }, 'Edit'),
-      el('button', { class: 'link', title: 'Replace with a new random value', onclick: () => openRotate(s.name) }, 'Rotate'),
-      el('button', { class: 'link', onclick: () => openReplace(s.name) }, 'Replace value'),
-      el('button', { class: 'link danger-text', onclick: () => openDelete(s.name) }, 'Delete'),
+      el('button', { class: 'link', title: 'Replace with a new random value', onclick: () => openRotate(s) }, 'Rotate'),
+      el('button', { class: 'link', onclick: () => openReplace(s) }, 'Replace value'),
+      el('button', { class: 'link danger-text', onclick: () => openDelete(s) }, 'Delete'),
     ),
   );
 }
 
 function renderSecrets() {
+  renderScopes();
+  const base = inScope();
+  categories = [...new Set(base.map((s) => s.category).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const q = $('#filter').value.trim().toLowerCase();
-  const searched = secrets.filter((s) => matches(s, q));
-  renderChips(searched);
+  const searched = base.filter((s) => matches(s, q));
+  renderChips(searched, base);
   const shown = searched.filter((s) => activeCategory === null || keyOf(s) === activeCategory);
 
-  $('#count').textContent = secrets.length ? `${shown.length} of ${secrets.length}` : '';
-  $('#secrets-empty').hidden = secrets.length > 0;
-  $('#secrets-nomatch').hidden = !(secrets.length && !shown.length);
+  $('#count').textContent = base.length ? `${shown.length} of ${base.length}` : '';
+  $('#secrets-empty').hidden = base.length > 0;
+  $('#secrets-empty-title').textContent = activeScope ? `No secrets in the scope ${activeScope} yet.` : 'No secrets yet.';
+  $('#secrets-nomatch').hidden = !(base.length && !shown.length);
   $('#secrets-body').closest('table').hidden = !shown.length;
 
   // One section per category (named ones A-Z, Uncategorized last). With no
@@ -395,7 +519,7 @@ function renderSecrets() {
         ),
       ));
     }
-    if (!closed) for (const s of list) rows.push(secretRow(s, q), ...(revealed.has(s.name) ? [revealRow(s.name)] : []));
+    if (!closed) for (const s of list) rows.push(secretRow(s, q), ...(revealed.has(sid(s)) ? [revealRow(s)] : []));
   }
   $('#secrets-body').replaceChildren(...rows);
 }
@@ -429,8 +553,9 @@ $('#filter').addEventListener('keydown', (e) => {
 const editDialog = $('#edit-dialog');
 let editTarget = null;
 function openEdit(s) {
-  editTarget = s.name;
+  editTarget = s;
   $('#edit-name').textContent = s.name;
+  $('#edit-scope').replaceChildren(...allScopes().map((x) => el('option', { value: x || 'default', selected: x === s.scope }, scopeLabel(x))));
   $('#edit-category').value = s.category;
   $('#edit-note').value = s.note;
   showError('#edit-error');
@@ -440,9 +565,20 @@ function openEdit(s) {
 $('#edit-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
-    await api(`/secrets/${encodeURIComponent(editTarget)}`, { method: 'PATCH', body: { category: $('#edit-category').value, note: $('#edit-note').value } });
+    const to = $('#edit-scope').value === 'default' ? '' : $('#edit-scope').value;
+    const moved = to !== editTarget.scope;
+    if (moved && secrets.some((x) => x.name === editTarget.name && x.scope === to)) return showError('#edit-error', `${editTarget.name} already exists in ${scopeLabel(to)}.`);
+    // Send only what changed, so a move isn't also logged as an edit.
+    const body = {
+      ...($('#edit-category').value.trim() !== editTarget.category && { category: $('#edit-category').value }),
+      ...($('#edit-note').value !== editTarget.note && { note: $('#edit-note').value }),
+      ...(moved && { to: to || 'default' }),
+    };
+    if (!Object.keys(body).length) return editDialog.close();
+    await api(secretPath(editTarget), { method: 'PATCH', body });
     editDialog.close();
-    toast(`${editTarget} updated`);
+    if (moved) hideValue(editTarget);
+    toast(moved ? `${editTarget.name} moved to ${scopeLabel(to)}` : `${editTarget.name} updated`);
     loadSecrets();
   } catch (err) {
     showError('#edit-error', err.message);
@@ -452,9 +588,9 @@ $('#edit-form').addEventListener('submit', async (e) => {
 // Rotate: random value generated on the server.
 const rotateDialog = $('#rotate-dialog');
 let rotateTarget = null;
-function openRotate(name) {
-  rotateTarget = name;
-  $('#rotate-name').textContent = name;
+function openRotate(s) {
+  rotateTarget = s;
+  $('#rotate-name').textContent = named(s);
   showError('#rotate-error');
   $('#rotate-form').hidden = false;
   $('#rotate-result').hidden = true;
@@ -465,7 +601,7 @@ function openRotate(name) {
 $('#rotate-copy').addEventListener('click', async () => {
   if (await copyText($('#rotate-value').textContent, $('#rotate-value'))) {
     $('#rotate-copy').textContent = 'Copied ✓';
-    toast(`${rotateTarget} copied`);
+    toast(`${rotateTarget.name} copied`);
   }
 });
 // Never leave the value in the page after the dialog closes.
@@ -474,13 +610,13 @@ rotateDialog.addEventListener('close', () => ($('#rotate-value').textContent = '
 $('#rotate-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
-    const r = await api(`/secrets/${encodeURIComponent(rotateTarget)}`, {
+    const r = await api(secretPath(rotateTarget), {
       method: 'PUT', body: { generate: { length: Number($('#rotate-length').value), charset: $('#rotate-charset').value } },
     });
     // Switch the dialog to the new value with a Copy button (fetched like Show, so it's logged).
-    const { value } = await api(`/secrets/${encodeURIComponent(rotateTarget)}/reveal`, { method: 'POST', probe: true });
-    if (revealed.has(rotateTarget)) hideValue(rotateTarget); // an older value on screen is stale now
-    $('#rotate-result-name').textContent = rotateTarget;
+    const { value } = await api(secretPath(rotateTarget, '/reveal'), { method: 'POST', probe: true });
+    if (revealed.has(sid(rotateTarget))) hideValue(rotateTarget); // an older value on screen is stale now
+    $('#rotate-result-name').textContent = named(rotateTarget);
     $('#rotate-result-info').textContent = `${r.length} random characters`;
     $('#rotate-value').textContent = value;
     $('#rotate-form').hidden = true;
@@ -520,10 +656,11 @@ addForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   showError('#add-error');
   const name = $('#add-name').value.trim();
-  if (secrets.some((s) => s.name === name)) return showError('#add-error', `${name} already exists. Use "Replace value" in its row.`);
+  const target = { name, scope: activeScope };
+  if (secrets.some((s) => s.name === name && s.scope === activeScope)) return showError('#add-error', `${name} already exists in ${scopeLabel(activeScope)}. Use "Replace value" in its row.`);
   try {
     const gen = $('#add-generate').checked;
-    await api(`/secrets/${encodeURIComponent(name)}`, {
+    await api(secretPath(target), {
       method: 'PUT',
       body: {
         ...(gen ? { generate: { length: Number($('#add-length').value), charset: $('#add-charset').value } } : { value: $('#add-value').value }),
@@ -537,7 +674,7 @@ addForm.addEventListener('submit', async (e) => {
     if (gen) {
       toast(`${name} saved with a random value`);
       await loadSecrets();
-      await revealFresh(name);
+      await revealFresh(target);
       return;
     }
     toast(`${name} saved`);
@@ -560,9 +697,9 @@ document.addEventListener('click', (e) => {
 // Replace
 const replaceDialog = $('#replace-dialog');
 let replaceTarget = null;
-function openReplace(name) {
-  replaceTarget = name;
-  $('#replace-name').textContent = name;
+function openReplace(s) {
+  replaceTarget = s;
+  $('#replace-name').textContent = named(s);
   $('#replace-form').reset();
   $('#replace-value').type = 'password';
   showError('#replace-error');
@@ -571,9 +708,9 @@ function openReplace(name) {
 $('#replace-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
-    await api(`/secrets/${encodeURIComponent(replaceTarget)}`, { method: 'PUT', body: { value: $('#replace-value').value } });
+    await api(secretPath(replaceTarget), { method: 'PUT', body: { value: $('#replace-value').value } });
     replaceDialog.close();
-    toast(`${replaceTarget} replaced`);
+    toast(`${named(replaceTarget)} replaced`);
     loadSecrets();
   } catch (err) {
     showError('#replace-error', err.message);
@@ -583,17 +720,18 @@ $('#replace-form').addEventListener('submit', async (e) => {
 // Delete
 const deleteDialog = $('#delete-dialog');
 let deleteTarget = null;
-function openDelete(name) {
-  deleteTarget = name;
-  $('#delete-name').textContent = name;
+function openDelete(s) {
+  deleteTarget = s;
+  $('#delete-name').textContent = named(s);
   deleteDialog.showModal();
 }
 $('#delete-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   try {
-    await api(`/secrets/${encodeURIComponent(deleteTarget)}`, { method: 'DELETE' });
+    await api(secretPath(deleteTarget), { method: 'DELETE' });
     deleteDialog.close();
-    toast(`${deleteTarget} deleted`);
+    hideValue(deleteTarget);
+    toast(`${named(deleteTarget)} deleted`);
     loadSecrets();
   } catch (err) {
     toast(err.message, true);
@@ -604,19 +742,24 @@ for (const b of document.querySelectorAll('[data-close]')) b.addEventListener('c
 replaceDialog.addEventListener('close', () => ($('#replace-value').value = ''));
 
 // ---------- activity ----------
+// " (scope work)" after a secret's name, for non-default scopes.
+const sc = (e) => (e.scope ? el('span', { class: 'scope-tag' }, e.scope) : null);
 function describe(e) {
   switch (e.type) {
     case 'command':
       return [el('span', { class: 'badge command' }, e.mode === 'interactive' ? 'shell session' : 'command'),
+        e.scopes?.length ? el('span', { class: 'scope-tag', title: 'Scopes this shell used' }, `-s ${e.scopes.join(',')}`) : null,
         e.mode === 'interactive' && (!e.command || e.command === '[]') ? el('span', { class: 'muted' }, 'interactive shell') : el('code', {}, e.command),
         e.cwd ? el('div', { class: 'muted' }, e.cwd) : null];
-    case 'secret.create': return [el('span', { class: 'badge change' }, 'created'), el('code', {}, e.name), e.by === 'client' ? el('span', { class: 'muted' }, ' by an agent (sm-add)') : null];
-    case 'secret.update': return [el('span', { class: 'badge change' }, 'value replaced'), el('code', {}, e.name)];
-    case 'secret.rotate': return [el('span', { class: 'badge change' }, 'rotated'), el('code', {}, e.name), e.generated ? el('span', { class: 'muted' }, ` → ${e.generated.length} random ${e.generated.charset} chars`) : null];
+    case 'scope.delete': return [el('span', { class: 'badge delete' }, 'scope deleted'), el('span', { class: 'scope-tag' }, e.scope), el('span', { class: 'muted' }, e.names?.length ? ` ${e.names.length} deleted: ${e.names.join(', ')}` : ' empty')];
+    case 'secret.move': return [el('span', { class: 'badge change' }, 'moved'), el('code', {}, e.name), el('span', { class: 'muted' }, ` ${scopeLabel(e.from)} → ${scopeLabel(e.to)}`)];
+    case 'secret.create': return [el('span', { class: 'badge change' }, 'created'), el('code', {}, e.name), sc(e), e.by === 'client' ? el('span', { class: 'muted' }, ' by an agent (sm-add)') : null];
+    case 'secret.update': return [el('span', { class: 'badge change' }, 'value replaced'), el('code', {}, e.name), sc(e)];
+    case 'secret.rotate': return [el('span', { class: 'badge change' }, 'rotated'), el('code', {}, e.name), sc(e), e.generated ? el('span', { class: 'muted' }, ` → ${e.generated.length} random ${e.generated.charset} chars`) : null];
     case 'secret.note': return [el('span', { class: 'badge' }, 'note edited'), el('code', {}, e.name)];
-    case 'secret.edit': return [el('span', { class: 'badge' }, 'details edited'), el('code', {}, e.name), e.category !== undefined ? el('span', { class: 'muted' }, ` → ${e.category || 'Uncategorized'}`) : null];
-    case 'secret.delete': return [el('span', { class: 'badge delete' }, 'deleted'), el('code', {}, e.name)];
-    case 'secret.reveal': return [el('span', { class: 'badge change' }, 'value viewed'), el('code', {}, e.name), e.ip ? el('span', { class: 'muted' }, ` from ${e.ip.replace(/^::ffff:/, '')}`) : null];
+    case 'secret.edit': return [el('span', { class: 'badge' }, 'details edited'), el('code', {}, e.name), sc(e), e.category !== undefined ? el('span', { class: 'muted' }, ` → ${e.category || 'Uncategorized'}`) : null];
+    case 'secret.delete': return [el('span', { class: 'badge delete' }, 'deleted'), el('code', {}, e.name), sc(e)];
+    case 'secret.reveal': return [el('span', { class: 'badge change' }, 'value viewed'), el('code', {}, e.name), sc(e), e.ip ? el('span', { class: 'muted' }, ` from ${e.ip.replace(/^::ffff:/, '')}`) : null];
     case 'auth.login': return [el('span', { class: 'badge' }, 'signed in'), el('span', { class: 'muted' }, `GUI from ${e.ip}`)];
     case 'auth.login-failed': return [el('span', { class: 'badge delete' }, 'wrong password'), el('span', { class: 'muted' }, `GUI from ${e.ip}`)];
     case 'auth.setup': return [el('span', { class: 'badge change' }, 'password set'), el('span', { class: 'muted' }, `first-time setup from ${e.ip}`)];
@@ -628,7 +771,7 @@ function describe(e) {
     case 'vault.init': return [el('span', { class: 'badge change' }, 'vault created'), el('code', {}, e.repo)];
     case 'vault.join': return [el('span', { class: 'badge change' }, 'joined vault'), el('code', {}, e.repo)];
     case 'vault.join-failed': return [el('span', { class: 'badge delete' }, 'vault join refused'), el('span', { class: 'muted' }, `wrong key file password from ${e.ip}`)];
-    case 'resolve': return [el('span', { class: 'badge' }, 'values fetched'), el('span', { class: 'muted' }, `${e.count} secret${e.count === 1 ? '' : 's'} by ${e.by}`)];
+    case 'resolve': return [el('span', { class: 'badge' }, 'values fetched'), el('span', { class: 'muted' }, `${e.count} secret${e.count === 1 ? '' : 's'} by ${e.by}` + (e.scopes ? `, scopes ${e.scopes.join(', ')}` : ''))];
     default: return [el('span', { class: 'badge' }, e.type)];
   }
 }

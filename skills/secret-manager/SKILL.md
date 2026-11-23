@@ -23,10 +23,21 @@ You use them by name, and `sm` puts the real value in at run time.
 ## Find out what exists
 
 ```bash
-sm-ls              # NAME, CATEGORY, NOTE of every secret. Never values.
+sm-ls              # SCOPE, NAME, CATEGORY, NOTE of every secret. Never values.
 sm-ls github       # only entries whose name, category or note matches
+sm-ls -s work      # only the scope "work"
 sm-ls -q           # names only
 ```
+
+**Scopes** are separate sets of secrets (e.g. `work` for an organisation's
+tokens). Plain `sm` only has the **default** scope. For a secret in another
+scope, start sm with that scope: `sm -s work -c '…'` (several:
+`sm -s work,org`, default plus one: `sm -s default,work`). The same name can
+exist in several scopes with different values (a personal and a work
+`GITHUB_TOKEN`), so use the scope the user means; if unclear, ask which one.
+Inside an `sm -s …` shell, `$SM_SCOPES` lists them and nested `sm` keeps them.
+Never delete scopes or move secrets between them (`smctl scopes rm`, `smctl move`): that is the
+user's decision, made in the GUI.
 
 Pick the secret by its name and note. If nothing fits and the value is
 something you can create yourself, use `sm-add` (below). If it's a key only the
@@ -59,7 +70,8 @@ sm -c 'aws iam create-access-key --user-name ci --output json' \
 - Pipe only the value itself (extract it with `jq`, `cut`, … in the same
   pipeline), never a whole JSON or log output.
 - `--if-missing` makes an existing name a no-op (exit 0) for re-runnable setup.
-- Always set `--category` and a `--note` saying what it is for.
+- Always set `--category` and a `--note` saying what it is for. Add
+  `--scope NAME` when it belongs to a scope (e.g. the user's work project).
 - Then use it as `$NAME` inside `sm`. In config files and templates write the
   name (`JWT_SECRET=$APP_JWT_SECRET`), never the value.
 

@@ -98,11 +98,21 @@ export function publicRequest(server, pathname, { method = 'GET', body, ca, inse
 }
 
 // ---- used by sm ----
-export async function getSecrets() {
+// `scopes`: list of scope names ('default' = the default scope); none = default.
+// Returns { secrets, overridden, empty } (see the server's /resolve).
+export async function getSecrets(scopes = []) {
   const cfg = loadConfig();
-  if (!usesServer(cfg)) return file.loadSecrets();
-  return (await request('/resolve', { method: 'POST', body: { pid: process.pid }, cfg })).secrets;
+  if (!usesServer(cfg)) {
+    if (scopes.some((s) => s !== 'default')) throw new Error('scopes need the sm server (smctl login); the local file store has only the default scope');
+    return { secrets: file.loadSecrets(), overridden: [], empty: [] };
+  }
+  return request('/resolve', { method: 'POST', body: { pid: process.pid, ...(scopes.length && { scopes }) }, cfg });
 }
+
+const q = (scope) => (scope && scope !== 'default' ? `?scope=${encodeURIComponent(scope)}` : '');
+const noScopes = (scope) => {
+  if (scope && scope !== 'default') throw new Error('scopes need the sm server (smctl login)');
+};
 
 export async function recordAudit(entry) {
   const cfg = loadConfig();
@@ -113,25 +123,26 @@ export async function recordAudit(entry) {
 // ---- used by smctl ----
 export async function listSecrets() {
   const cfg = loadConfig();
-  if (!usesServer(cfg)) return Object.keys(file.loadSecrets()).sort().map((name) => ({ name }));
+  if (!usesServer(cfg)) return Object.keys(file.loadSecrets()).sort().map((name) => ({ name, scope: '' }));
   return (await request('/secrets', { cfg })).secrets;
 }
 
-export async function setSecret(name, value, note, category) {
+export async function setSecret(name, value, note, category, scope) {
   const cfg = loadConfig();
-  if (!usesServer(cfg)) return file.setSecret(name, value);
-  await request(`/secrets/${encodeURIComponent(name)}`, { method: 'PUT', body: { value, note, category }, admin: true, cfg });
+  if (!usesServer(cfg)) return noScopes(scope), file.setSecret(name, value);
+  await request(`/secrets/${encodeURIComponent(name)}${q(scope)}`, { method: 'PUT', body: { value, note, category }, admin: true, cfg });
 }
 
 // Create only; throws `exists` if the name is taken. Client token is enough.
-export async function createSecret(name, value, note, category) {
+export async function createSecret(name, value, note, category, scope) {
   const cfg = loadConfig();
   if (!usesServer(cfg)) {
+    noScopes(scope);
     if (name in file.loadSecrets()) throw Object.assign(new Error(`${name} already exists`), { exists: true });
     return file.setSecret(name, value);
   }
   try {
-    await request('/secrets', { method: 'POST', body: { name, value, note, category }, cfg });
+    await request('/secrets', { method: 'POST', body: { name, value, note, category, scope }, cfg });
   } catch (err) {
     if (/already exists/.test(err.message)) err.exists = true;
     throw err;
@@ -139,19 +150,27 @@ export async function createSecret(name, value, note, category) {
 }
 
 // Replace a value with a random one generated on the server (admin).
-export async function rotateSecret(name, length, charset) {
+export async function rotateSecret(name, length, charset, scope) {
   const cfg = loadConfig();
   if (!usesServer(cfg)) throw new Error('rotate needs the sm server (smctl login)');
-  const known = (await request('/secrets', { cfg })).secrets.some((s) => s.name === name);
-  if (!known) throw new Error(`no such secret: ${name}`);
-  return request(`/secrets/${encodeURIComponent(name)}`, { method: 'PUT', body: { generate: { length, charset } }, admin: true, cfg });
+  const want = scope && scope !== 'default' ? scope : '';
+  const known = (await request('/secrets', { cfg })).secrets.some((s) => s.name === name && (s.scope || '') === want);
+  if (!known) throw new Error(`no such secret: ${name}${want ? ` in scope ${want}` : ''}`);
+  return request(`/secrets/${encodeURIComponent(name)}${q(scope)}`, { method: 'PUT', body: { generate: { length, charset } }, admin: true, cfg });
 }
 
-export async function removeSecret(name) {
+// Move a secret to another scope (admin).
+export async function moveSecret(name, from, to) {
   const cfg = loadConfig();
-  if (!usesServer(cfg)) return file.removeSecret(name);
+  if (!usesServer(cfg)) throw new Error('scopes need the sm server (smctl login)');
+  return request(`/secrets/${encodeURIComponent(name)}${q(from)}`, { method: 'PATCH', body: { to }, admin: true, cfg });
+}
+
+export async function removeSecret(name, scope) {
+  const cfg = loadConfig();
+  if (!usesServer(cfg)) return noScopes(scope), file.removeSecret(name);
   try {
-    await request(`/secrets/${encodeURIComponent(name)}`, { method: 'DELETE', admin: true, cfg });
+    await request(`/secrets/${encodeURIComponent(name)}${q(scope)}`, { method: 'DELETE', admin: true, cfg });
     return true;
   } catch (err) {
     if (err.message === 'no such secret') return false;

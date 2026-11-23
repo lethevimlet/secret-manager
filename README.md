@@ -39,7 +39,7 @@ Requirements: Linux, Node.js 20+, bash, util-linux `script` (interactive shell),
 
 - [Quick start](#quick-start)
 - [Installer](#installer)
-- [Using `sm`](#using-sm)
+- [Using `sm`](#using-sm): [scopes](#scopes)
 - [Managing secrets](#managing-secrets): [GUI](#gui) · [command line](#command-line-reference)
 - [Other machines](#using-the-server-from-other-machines)
 - [Syncing several servers (sm-vault)](#syncing-several-servers-sm-vault)
@@ -152,6 +152,7 @@ sm -c 'command …'          # one command (use single quotes, see below)
 sm ./script.sh arg1 arg2    # a script
 echo 'env | sort' | sm      # commands on stdin
 sm                          # interactive shell, prompt tagged with a red "sm"
+sm -s work -c 'gh repo list'   # only the secrets of the scope "work" (see Scopes)
 ```
 
 Inside `sm`:
@@ -188,6 +189,47 @@ Environment=API_AUTH=Bearer {{secret:MY_API_KEY}}
 ExecStart=/usr/local/bin/sm /opt/myjob/run.sh
 ```
 
+### Scopes
+
+A **scope** is a separate set of secrets, for example your work or
+organisation tokens. Secrets you add without a scope are in **Default**. A
+shell gets only the scopes it asks for:
+
+```bash
+sm -c '…'                    # Default only (as before scopes existed)
+sm -s work -c 'git push'     # only the secrets in "work"
+sm -s work,org               # interactive shell with "work" and "org"; prompt: sm[work,org] in red
+sm -s default,work -c '…'    # Default plus "work"
+```
+
+- The same name can exist in several scopes, e.g. a personal `GITHUB_TOKEN`
+  in Default and the company's `GITHUB_TOKEN` in `work`: `sm -c 'git push'`
+  pushes with the first, `sm -s work -c 'git push'` with the second.
+- With several scopes and the same name in more than one, the scope listed
+  **last** wins, and sm prints which one it used. A scope with no secrets (a
+  typo, say) gets a warning.
+- Scope names: lowercase letters, digits, `_` and `-` (`Work` = `work`).
+  `default` means the Default scope.
+- `-s` / `--scope` (or `--scope=work`) must come **first**, before bash's own
+  options. Anywhere else `-s` is bash's (read commands from stdin), and so is
+  a first `-s` that isn't followed by a name (`curl … | sm -s -- args`).
+- Inside a scoped shell `SM_SCOPES` holds the scope list, so a nested `sm`
+  (or an agent started there that uses `sm -c`) keeps the same scopes.
+- In the GUI every scope is a tab; **+ New scope** adds one, **Edit** moves a
+  secret to another scope. **Delete scope…** (under the tabs) deletes the
+  scope **and its secrets**: it lists them and needs the scope's name typed;
+  with sync on they're deleted on every server. `smctl scopes rm NAME` does
+  the same (asks you to type the name). From a terminal: `--scope NAME` on `sm-add`,
+  `sm-ls`, `smctl set|rm|rotate|list|env`, plus `smctl move NAME --to SCOPE`
+  and `smctl scopes`.
+- Scopes sync through the vault like everything else. Update every server
+  before using scopes: an older server can't read a scoped secret from the
+  vault, and its sync stops with an error.
+- The local file store (no server) has only Default.
+
+Scopes decide what a shell *gets*; they're not separate permissions. Any
+machine with the client token can ask for any scope.
+
 ---
 
 ## Managing secrets
@@ -215,7 +257,10 @@ Open the server's address in a browser (`smctl gui` prints it, signed in).
     control (your own app's signing key, a database password you'll update).
     For keys issued by a service (GitHub, OpenAI …) use **Replace value** with
     the new key from that service.
-  - **Edit** (category and note), **Replace value**, **Delete**.
+  - **Edit** (scope, category and note), **Replace value**, **Delete**.
+  - **Scopes** are tabs above the list (Default first); **+ New scope** adds
+    one, which stays once it holds a secret. New secrets go into the scope
+    being viewed. See [Scopes](#scopes).
   - **Categories** split the list into sections and show as filter chips;
     **search** covers name, category and note (press `/`).
 - **Activity tab:** every command run through `sm` (as written, with
@@ -229,8 +274,9 @@ Open the server's address in a browser (`smctl gui` prints it, signed in).
 | Command | What it does |
 |---|---|
 | `sm -c '…'`, `sm script`, `sm` | Run with secrets as variables, output blocked. |
-| `sm-ls [SEARCH] [-q] [--json]` | List names, categories and notes. Never values. |
-| `sm-add NAME --generate [N] [--charset C] [--category X] [--note T]` | Create a secret with a random value (default 12 chars). |
+| `sm -s SCOPE[,SCOPE…] …` | The same with only those [scopes](#scopes) (default: Default). |
+| `sm-ls [SEARCH] [-s SCOPE] [-q] [--json]` | List scopes, names, categories and notes. Never values. |
+| `sm-add NAME --generate [N] [--charset C] [--scope S] [--category X] [--note T]` | Create a secret with a random value (default 12 chars). |
 | `COMMAND \| sm-add NAME …` | Create a secret from a command's output without displaying it. |
 | `sm-add … --if-missing` | Do nothing (exit 0) if the name exists. |
 
@@ -245,12 +291,15 @@ and an agent's transcript). Character sets: `alnum` (default), `hex`,
 |---|---|
 | `smctl status` | Which server, whether it answers, how many secrets. |
 | `smctl gui [URL] [--no-open]` | Print/open the GUI address, already signed in. |
-| `printf %s VALUE \| smctl set NAME [--category X] [--note T]` | Add or replace a value (from stdin). |
-| `smctl rotate NAME [--length N] [--charset C]` | New random value, generated on the server. |
-| `smctl list [-l]` | Names (with `-l`: category, dates, use count, note). |
-| `smctl rm NAME` | Delete a secret. |
+| `printf %s VALUE \| smctl set NAME [--scope S] [--category X] [--note T]` | Add or replace a value (from stdin). |
+| `smctl rotate NAME [--scope S] [--length N] [--charset C]` | New random value, generated on the server. |
+| `smctl list [-l] [--scope S]` | Names (`scope/NAME` outside Default; with `-l`: scope, category, dates, use count, note). |
+| `smctl rm NAME [--scope S]` | Delete a secret. |
+| `smctl move NAME --to SCOPE [--scope FROM]` | Move a secret to another scope (`default` = Default). |
+| `smctl scopes` | Scopes and how many secrets each has. |
+| `smctl scopes rm NAME` | Delete a scope **and its secrets** (asks you to type the name; `--confirm NAME` without a terminal). |
 | `smctl audit [N]` | Last N activity entries. |
-| `smctl env` | Print `export NAME='{{secret:NAME}}'` lines. |
+| `smctl env [--scope S]` | Print `export NAME='{{secret:NAME}}'` lines. |
 | `smctl sync [status]` | Vault state: repository, last sync, last error. |
 | `smctl sync deploy-key` | This server's SSH key, to add to the vault repository. |
 | `smctl sync init --repo URL [--out FILE]` | First server: create the vault, write `sm-vault.key`. |
@@ -540,6 +589,7 @@ what is and isn't caught.
 | `SM_BACKEND=file` | Use the local file store (`.sm/`) instead of a server. |
 | `SM_AUTO_ENV=0` | Don't export secrets as `$NAME` (only placeholders in env/command are resolved). |
 | `SM_PROMPT` | Prompt tag of interactive shells (`SM_PROMPT=` turns it off). |
+| `SM_SCOPES` | Scopes when `sm` is started without `-s` (comma-separated); set by `sm -s` for nested shells. |
 | `SM_AUDIT=0` | Don't report commands to Activity. |
 | `SM_GIT_SECRET` | Secret name `git-credential-sm` uses (default `GITHUB_TOKEN`). |
 
@@ -549,7 +599,8 @@ what is and isn't caught.
 
 | Message | What to do |
 |---|---|
-| `sm: unknown secret: NAME` | No secret with that name: `sm-ls`. |
+| `sm: unknown secret: NAME` | No secret with that name in the scopes used: `sm-ls` (the SCOPE column), then `sm -s SCOPE`. |
+| `sm: scope X has no secrets` | Typo, or the scope is empty: `smctl scopes`. |
 | `sm: secret server … unreachable; running without secrets` | Server down: `systemctl status sm-server`, `smctl status`. |
 | `git-credential-sm: github.com credentials are only available inside sm` | Run it as `sm -c 'git push'`. |
 | `sm-add: NAME already exists` (exit 3) | Use the existing secret, or replace it in the GUI. |

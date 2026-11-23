@@ -67,11 +67,16 @@
         <button id="add-toggle" class="primary">Add secret</button>
       </div>
 
+      <div class="scope-bar">
+        <div id="scope-tabs" class="scope-tabs" role="tablist" aria-label="Scopes"></div>
+        <p id="scope-hint" class="muted scope-hint"></p>
+      </div>
+
       <form id="add-form" class="card add-form" hidden>
         <div class="field">
           <label for="add-name">Name</label>
           <input id="add-name" required pattern="[A-Za-z_][A-Za-z0-9_]*" maxlength="128" placeholder="API_KEY" autocomplete="off" spellcheck="false">
-          <small class="muted">Letters, digits and _. This is the shell variable name.</small>
+          <small class="muted">Letters, digits and _. This is the shell variable name. Added to the scope <strong id="add-scope"></strong>.</small>
         </div>
         <div class="field">
           <label for="add-value">Value</label>
@@ -129,7 +134,7 @@
           <p class="muted">Nothing matches. <button id="clear-search" class="link">Clear the search</button></p>
         </div>
         <div id="secrets-empty" class="empty" hidden>
-          <p><strong>No secrets yet.</strong></p>
+          <p><strong id="secrets-empty-title">No secrets yet.</strong></p>
           <p class="muted">Add one with the button above, or from a terminal: <code>printf %s 'value' | smctl set NAME</code></p>
         </div>
       </div>
@@ -253,7 +258,9 @@
   <dialog id="edit-dialog">
     <form method="dialog" id="edit-form">
       <h3>Edit <code id="edit-name"></code></h3>
-      <p class="muted">Category and note only. The value is not changed.</p>
+      <p class="muted">Scope, category and note. The value is not changed.</p>
+      <label for="edit-scope">Scope</label>
+      <select id="edit-scope"></select>
       <label for="edit-category">Category</label>
       <input id="edit-category" list="category-list" maxlength="40" placeholder="Leave empty for Uncategorized" autocomplete="off">
       <label for="edit-note">Note</label>
@@ -267,6 +274,21 @@
   </dialog>
 
   <datalist id="category-list"></datalist>
+
+  <dialog id="scope-dialog">
+    <form method="dialog" id="scope-form">
+      <h3>New scope</h3>
+      <p class="muted">A scope is a separate set of secrets, e.g. work or org tokens. A shell gets only the scopes it asks for: <code>sm -s work</code>, or several with <code>sm -s work,org</code>. Without <code>-s</code>, sm uses Default.</p>
+      <label for="scope-name">Name</label>
+      <input id="scope-name" required maxlength="32" placeholder="work" autocomplete="off" spellcheck="false">
+      <small class="muted">Lowercase letters, digits, _ and -. The tab stays once it holds a secret.</small>
+      <p id="scope-error" class="error" role="alert" hidden></p>
+      <div class="actions">
+        <button type="button" class="ghost" data-close>Cancel</button>
+        <button class="primary" type="submit" value="ok">Create</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="keyfile-dialog">
     <form method="dialog" id="keyfile-form">
@@ -354,6 +376,26 @@
       <div class="actions">
         <button type="button" class="ghost" data-close>Cancel</button>
         <button class="danger" type="submit" value="ok">Delete</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="scope-delete-dialog">
+    <form method="dialog" id="scope-delete-form">
+      <h3>Delete the scope <code id="sd-name"></code>?</h3>
+      <div id="sd-empty">
+        <p class="muted">It holds no secrets. The tab is removed.</p>
+      </div>
+      <div id="sd-full">
+        <p>This <strong>deletes <span id="sd-count"></span></strong> for good: <span id="sd-list"></span>.</p>
+        <p class="muted">Commands that use them will stop with "unknown secret". With sync on, they are deleted on every server. This can't be undone.</p>
+        <label for="sd-confirm">Type <code id="sd-name2"></code> to confirm</label>
+        <input id="sd-confirm" autocomplete="off" spellcheck="false">
+      </div>
+      <p id="sd-error" class="error" role="alert" hidden></p>
+      <div class="actions">
+        <button type="button" class="ghost" data-close>Cancel</button>
+        <button id="sd-submit" class="danger" type="submit" value="ok">Remove scope</button>
       </div>
     </form>
   </dialog>

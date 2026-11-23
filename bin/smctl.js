@@ -7,11 +7,15 @@
 //   smctl gui [URL] [--no-open]   print (and try to open) the GUI URL, signed in
 //   smctl setup-code          one-time code to set the first GUI password from another machine
 //   smctl passwd              set/reset the GUI password (admin token; new password on stdin or prompted)
-//   smctl set NAME [--note TEXT] [--category NAME]   value from stdin (never argv)
-//   smctl list                names only
-//   smctl rotate NAME [--length N (12)] [--charset alnum|hex|base64url|symbols]   new random value, made on the server
-//   smctl rm NAME
-//   smctl env                 `export NAME='{{secret:NAME}}'` lines
+//   smctl set NAME [--scope S] [--note TEXT] [--category NAME]   value from stdin (never argv)
+//   smctl list [-l] [--scope S]   names (with -l: scope, category, use counts)
+//   smctl rotate NAME [--scope S] [--length N (12)] [--charset alnum|hex|base64url|symbols]   new random value, made on the server
+//   smctl rm NAME [--scope S]
+//   smctl move NAME --to SCOPE [--scope S]   move a secret to another scope ("default" = the default scope)
+//   smctl scopes              scopes and how many secrets each holds
+//   smctl scopes rm NAME [--confirm NAME]   delete a scope AND its secrets (asks to type the name)
+//   smctl env [--scope S]     `export NAME='{{secret:NAME}}'` lines
+//   (--scope / -s: which scope; without it, the default scope)
 //   smctl audit [N]
 //   smctl sync [status]       vault state (sm-vault, sync between servers)
 //   smctl sync deploy-key     this server's SSH public key, to add as a deploy key (write access) to the repo
@@ -91,6 +95,13 @@ async function fetchCa(server, wantFp) {
 }
 
 const fmtTime = (iso) => (iso ? iso.replace('T', ' ').slice(0, 19) : '-');
+
+// --scope / -s: '' = default scope.
+function scopeFlag() {
+  const v = flag('--scope') ?? flag('-s');
+  return v === undefined ? '' : v.trim().toLowerCase() === 'default' ? '' : v.trim().toLowerCase();
+}
+const inScope = (scope) => (scope ? ` in scope ${scope}` : '');
 
 async function main() {
   switch (command) {
@@ -185,48 +196,88 @@ async function main() {
       return 0;
     }
     case 'set': {
+      const scope = scopeFlag();
       const note = flag('--note');
       const category = flag('--category');
       const [name] = rest;
-      if (!name || !NAME_RE.test(name)) return fail('usage: smctl set NAME [--note TEXT] [--category NAME]  (value on stdin)');
+      if (!name || !NAME_RE.test(name)) return fail('usage: smctl set NAME [--scope S] [--note TEXT] [--category NAME]  (value on stdin)');
       const value = await readValue(name);
       if (!value) return fail('empty value');
-      await backend.setSecret(name, value, note, category);
+      await backend.setSecret(name, value, note, category, scope);
       if (value.length < 8) process.stderr.write(`smctl: warning: ${name} is short (${value.length} chars); redaction will also hit unrelated output that contains it\n`);
-      process.stderr.write(`smctl: stored ${name}\n`);
+      process.stderr.write(`smctl: stored ${name}${inScope(scope)}\n`);
       return 0;
     }
     case 'list': {
-      const list = await backend.listSecrets();
+      const only = rest.includes('--scope') || rest.includes('-s') ? scopeFlag() : null;
+      const list = (await backend.listSecrets()).filter((s) => only === null || (s.scope || '') === only);
       if (rest.includes('-l')) {
-        for (const s of list) process.stdout.write(`${s.name.padEnd(24)} ${(s.category || '-').padEnd(14)} updated ${fmtTime(s.updatedAt)}  used ${s.uses ?? '-'}x  ${s.note || ''}\n`);
+        for (const s of list) process.stdout.write(`${(s.scope || 'default').padEnd(10)} ${s.name.padEnd(24)} ${(s.category || '-').padEnd(14)} updated ${fmtTime(s.updatedAt)}  used ${s.uses ?? '-'}x  ${s.note || ''}\n`);
       } else {
-        for (const s of list) process.stdout.write(s.name + '\n');
+        for (const s of list) process.stdout.write((s.scope && only === null ? `${s.scope}/` : '') + s.name + '\n');
       }
       return 0;
     }
-    case 'rotate': {
-      const length = Number(flag('--length') || 12);
-      const charset = flag('--charset') || 'alnum';
-      if (!rest[0]) return fail('usage: smctl rotate NAME [--length N (12)] [--charset alnum|hex|base64url|symbols]');
-      const r = await backend.rotateSecret(rest[0], length, charset);
-      process.stderr.write(`smctl: ${rest[0]} rotated (${r.length} random ${charset} chars). Update anything that still uses the old value.\n`);
+    case 'scopes': {
+      if (rest[0] === 'rm') return removeScope(rest[1]);
+      const counts = new Map([['', 0]]);
+      for (const s of await backend.listSecrets()) counts.set(s.scope || '', (counts.get(s.scope || '') || 0) + 1);
+      for (const [scope, n] of [...counts].sort((a, b) => a[0].localeCompare(b[0]))) process.stdout.write(`${(scope || 'default').padEnd(20)} ${n}\n`);
       return 0;
     }
-    case 'rm':
-      if (!rest[0]) return fail('usage: smctl rm NAME');
-      return (await backend.removeSecret(rest[0])) ? 0 : fail(`no such secret: ${rest[0]}`);
-    case 'env':
-      for (const { name } of await backend.listSecrets()) process.stdout.write(`export ${name}='${placeholder(name)}'\n`);
+    case 'rotate': {
+      const scope = scopeFlag();
+      const length = Number(flag('--length') || 12);
+      const charset = flag('--charset') || 'alnum';
+      if (!rest[0]) return fail('usage: smctl rotate NAME [--scope S] [--length N (12)] [--charset alnum|hex|base64url|symbols]');
+      const r = await backend.rotateSecret(rest[0], length, charset, scope);
+      process.stderr.write(`smctl: ${rest[0]}${inScope(scope)} rotated (${r.length} random ${charset} chars). Update anything that still uses the old value.\n`);
       return 0;
+    }
+    case 'move': {
+      const scope = scopeFlag();
+      const to = flag('--to');
+      if (!rest[0] || to === undefined) return fail('usage: smctl move NAME --to SCOPE [--scope FROM]   ("default" = the default scope)');
+      const r = await backend.moveSecret(rest[0], scope, to);
+      process.stderr.write(`smctl: ${rest[0]} moved to scope ${r.scope || 'default'}\n`);
+      return 0;
+    }
+    case 'rm': {
+      const scope = scopeFlag();
+      if (!rest[0]) return fail('usage: smctl rm NAME [--scope S]');
+      return (await backend.removeSecret(rest[0], scope)) ? 0 : fail(`no such secret: ${rest[0]}${inScope(scope)}`);
+    }
+    case 'env': {
+      const scope = scopeFlag();
+      for (const { name } of (await backend.listSecrets()).filter((s) => (s.scope || '') === scope)) process.stdout.write(`export ${name}='${placeholder(name)}'\n`);
+      return 0;
+    }
     case 'sync':
       return syncCommand(rest.shift() || 'status');
     case 'audit':
       for (const e of await backend.readAudit(Number(rest[0] || 20))) process.stdout.write(JSON.stringify(e) + '\n');
       return 0;
     default:
-      return fail('usage: smctl {login|logout|status|gui|pair|setup-code|passwd|set NAME|rotate NAME|list [-l]|rm NAME|env|audit [N]|sync …}');
+      return fail('usage: smctl {login|logout|status|gui|pair|setup-code|passwd|set NAME|rotate NAME|list [-l]|rm NAME|move NAME --to S|scopes|env|audit [N]|sync …}  (--scope S for one scope)');
   }
+}
+
+async function removeScope(name) {
+  if (!name || name.startsWith('-')) return fail('usage: smctl scopes rm NAME [--confirm NAME]');
+  const scope = name.trim().toLowerCase();
+  const names = (await backend.listSecrets()).filter((s) => s.scope === scope).map((s) => s.name);
+  if (!names.length) return fail(`scope ${scope} holds no secrets (an empty scope doesn't exist on the server)`);
+  let confirm = flag('--confirm');
+  if (confirm === undefined) {
+    if (!process.stdin.isTTY) return fail(`this deletes ${names.length} secret(s); confirm with --confirm ${scope}`);
+    process.stderr.write(`This deletes ${names.length} secret(s) for good (on every synced server): ${names.join(', ')}\n`);
+    const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+    confirm = await rl.question(`Type the scope name (${scope}) to confirm: `);
+    rl.close();
+  }
+  const r = await backend.request(`/scopes/${encodeURIComponent(scope)}/delete`, { method: 'POST', admin: true, body: { confirm } });
+  process.stderr.write(`smctl: scope ${scope} and ${r.names.length} secret(s) deleted\n`);
+  return 0;
 }
 
 const LONG = { admin: true, timeoutMs: 180_000 };

@@ -3,7 +3,11 @@
 [ -f /etc/bash.bashrc ] && . /etc/bash.bashrc
 [ -f ~/.bashrc ] && . ~/.bashrc
 
-__sm_tag=${SM_PROMPT-$'\[\e[1;31m\]sm\[\e[0m\] '}
+# sm, or sm[work,org] when started with scopes (sm -s work,org). SM_SCOPES is
+# set by sm itself from validated scope names, so it is safe inside PS1.
+if [ -n "$SM_SCOPES" ]; then __sm_label="sm[$SM_SCOPES]"; else __sm_label=sm; fi
+__sm_tag=${SM_PROMPT-$'\[\e[1;31m\]'"$__sm_label"$'\[\e[0m\] '}
+unset __sm_label
 __sm_prompt() {
   case "$PS1" in
     "$__sm_tag"*) ;;

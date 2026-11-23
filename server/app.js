@@ -10,6 +10,7 @@ import express from 'express';
 import { fileURLToPath } from 'node:url';
 import { COOKIE, MIN_PASSWORD, readCookie, isLoopback } from './auth.js';
 import { generateValue } from '../src/generate.js';
+import { cleanScope } from './store.js';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 
@@ -170,28 +171,28 @@ export function createApp({ store, tokens, audit, noAuth = false, guiAuth = null
     res.json({ token: tokens.client, scope: 'client' });
   });
 
-  // Resolve the caller's scope: bearer token, or a GUI session cookie.
+  // Resolve the caller's role: bearer token, or a GUI session cookie.
   api.use((req, res, next) => {
     const m = /^Bearer (.+)$/.exec(req.get('authorization') || '');
-    if (m && sameToken(m[1], tokens.admin)) req.scope = 'admin';
-    else if (m && sameToken(m[1], tokens.client)) req.scope = 'client';
+    if (m && sameToken(m[1], tokens.admin)) req.role = 'admin';
+    else if (m && sameToken(m[1], tokens.client)) req.role = 'client';
     else if (!m && guiAuth && guiAuth.checkSession(readCookie(req, COOKIE))) {
       // Cookies are sent by the browser automatically, so changes made with
       // one must carry a header other sites can't add (CSRF guard).
       if (req.method !== 'GET' && req.get('x-sm-gui') !== '1') return res.status(403).json({ error: 'missing X-SM-GUI header' });
-      req.scope = 'admin';
+      req.role = 'admin';
       req.session = true;
     } else if (noAuth && !m) {
       // Testing mode: management without a token, but never secret values.
-      req.scope = 'admin';
+      req.role = 'admin';
       req.anonymous = true;
     } else return res.status(401).json({ error: 'missing or invalid token' });
     next();
   });
-  const need = (scope) => (req, res, next) =>
-    scope === 'client' || req.scope === 'admin' ? next() : res.status(403).json({ error: `${scope} token required` });
+  const need = (role) => (req, res, next) =>
+    role === 'client' || req.role === 'admin' ? next() : res.status(403).json({ error: `${role} token required` });
 
-  api.get('/whoami', (req, res) => res.json({ scope: req.scope, anonymous: Boolean(req.anonymous), session: Boolean(req.session) }));
+  api.get('/whoami', (req, res) => res.json({ scope: req.role, anonymous: Boolean(req.anonymous), session: Boolean(req.session) }));
 
   // Admin: create a pairing code for another machine.
   api.post('/pair', need('admin'), (req, res) => {
@@ -262,75 +263,108 @@ export function createApp({ store, tokens, audit, noAuth = false, guiAuth = null
     });
   }
 
-  api.get('/secrets', (_req, res) => res.json({ secrets: store.list(), categories: store.categories() }));
+  // Secrets are identified by name + scope; per-secret routes take the scope
+  // as ?scope=NAME (missing or "default" = the default scope).
+  const scopeOf = (req) => cleanScope(req.query.scope);
+  const withScope = (scope) => (scope ? { scope } : {});
+  const label = (name, scope) => (scope ? `${name} in scope ${scope}` : name);
+
+  api.get('/secrets', (_req, res) => res.json({ secrets: store.list(), categories: store.categories(), scopes: store.scopes() }));
 
   // Create only (agents, via sm-add with the client token): never replaces.
   api.post('/secrets', (req, res) => {
     const { name, value, note, category } = req.body || {};
+    const scope = cleanScope(req.body?.scope);
     if (typeof name !== 'string') return res.status(400).json({ error: 'name required' });
-    if (store.has(name)) return res.status(409).json({ error: `${name} already exists` });
-    store.set(name, value, note, category);
-    audit.add({ type: 'secret.create', name, by: req.anonymous ? 'anonymous' : req.scope });
-    res.status(201).json({ name, created: true });
+    if (store.has(name, scope)) return res.status(409).json({ error: `${label(name, scope)} already exists` });
+    store.set(name, value, note, category, scope);
+    audit.add({ type: 'secret.create', name, ...withScope(scope), by: req.anonymous ? 'anonymous' : req.role });
+    res.status(201).json({ name, scope, created: true });
   });
 
   api.put('/secrets/:name', need('admin'), (req, res) => {
     const { name } = req.params;
+    const scope = scopeOf(req);
     const { note, category, generate } = req.body || {};
     // `generate: { length, charset }` = a random value made here, so it never
     // travels over the network or through the browser (rotation).
     const value = generate ? generateValue(generate.length ?? 12, generate.charset ?? 'alnum') : req.body?.value;
-    const created = store.set(name, value, note, category);
+    const created = store.set(name, value, note, category, scope);
     const type = created ? 'secret.create' : generate ? 'secret.rotate' : 'secret.update';
-    audit.add({ type, name, ...(generate && { generated: { length: value.length, charset: generate.charset ?? 'alnum' } }), by: req.anonymous ? 'anonymous' : 'admin' });
-    res.status(created ? 201 : 200).json({ name, created, ...(generate && { generated: true, length: value.length }) });
+    audit.add({ type, name, ...withScope(scope), ...(generate && { generated: { length: value.length, charset: generate.charset ?? 'alnum' } }), by: req.anonymous ? 'anonymous' : 'admin' });
+    res.status(created ? 201 : 200).json({ name, scope, created, ...(generate && { generated: true, length: value.length }) });
   });
 
+  // Edit note/category, or move to another scope with { to: "scope" }.
   api.patch('/secrets/:name', need('admin'), (req, res) => {
     const { name } = req.params;
-    const { note, category } = req.body || {};
-    if (typeof note !== 'string' && typeof category !== 'string') return res.status(400).json({ error: 'note or category required' });
-    if (!store.update(name, { note: typeof note === 'string' ? note : undefined, category })) return res.status(404).json({ error: 'no such secret' });
-    audit.add({ type: 'secret.edit', name, ...(typeof category === 'string' && { category: store.list().find((x) => x.name === name).category }), by: req.anonymous ? 'anonymous' : 'admin' });
-    res.json({ name });
+    const scope = scopeOf(req);
+    const { note, category, to } = req.body || {};
+    if (typeof note !== 'string' && typeof category !== 'string' && typeof to !== 'string') return res.status(400).json({ error: 'note, category or to (scope) required' });
+    const target = typeof to === 'string' ? cleanScope(to) : scope;
+    if (!store.update(name, { note: typeof note === 'string' ? note : undefined, category, to: typeof to === 'string' ? to : undefined }, scope)) return res.status(404).json({ error: 'no such secret' });
+    const by = req.anonymous ? 'anonymous' : 'admin';
+    if (target !== scope) audit.add({ type: 'secret.move', name, from: scope, to: target, by });
+    if (typeof note === 'string' || typeof category === 'string') {
+      audit.add({ type: 'secret.edit', name, ...withScope(target), ...(typeof category === 'string' && { category: store.list().find((x) => x.name === name && x.scope === target).category }), by });
+    }
+    res.json({ name, scope: target });
   });
 
   api.delete('/secrets/:name', need('admin'), (req, res) => {
     const { name } = req.params;
-    if (!store.remove(name)) return res.status(404).json({ error: 'no such secret' });
-    audit.add({ type: 'secret.delete', name, by: req.anonymous ? 'anonymous' : 'admin' });
+    const scope = scopeOf(req);
+    if (!store.remove(name, scope)) return res.status(404).json({ error: 'no such secret' });
+    audit.add({ type: 'secret.delete', name, ...withScope(scope), by: req.anonymous ? 'anonymous' : 'admin' });
     res.status(204).end();
   });
 
   // One value, for the owner in the GUI. Always needs the real admin token,
   // also when SM_NO_AUTH=1 lets the rest of the GUI work without one.
   api.post('/secrets/:name/reveal', (req, res) => {
-    if (req.scope !== 'admin' || req.anonymous) return res.status(401).json({ error: 'viewing values needs the admin token', needAdminToken: true });
-    const value = store.reveal(req.params.name);
+    if (req.role !== 'admin' || req.anonymous) return res.status(401).json({ error: 'viewing values needs the admin token', needAdminToken: true });
+    const scope = scopeOf(req);
+    const value = store.reveal(req.params.name, scope);
     if (value === null) return res.status(404).json({ error: 'no such secret' });
-    audit.add({ type: 'secret.reveal', name: req.params.name, by: 'admin', ip: req.socket.remoteAddress });
-    res.json({ name: req.params.name, value });
+    audit.add({ type: 'secret.reveal', name: req.params.name, ...withScope(scope), by: 'admin', ip: req.socket.remoteAddress });
+    res.json({ name: req.params.name, scope, value });
   });
 
-  // All values, for the sm shell.
+  // Delete a whole scope and its secrets (admin). Needs { confirm: "<scope>" },
+  // the scope's name typed again, so it can't happen by accident.
+  api.post('/scopes/:scope/delete', need('admin'), (req, res) => {
+    const scope = cleanScope(req.params.scope);
+    if (String(req.body?.confirm ?? '').trim().toLowerCase() !== scope) {
+      return fail(res, 400, `confirm with the scope's name (${scope || 'default'})`);
+    }
+    const names = store.removeScope(scope);
+    audit.add({ type: 'scope.delete', scope, names, by: req.anonymous ? 'anonymous' : req.session ? 'gui' : 'admin' });
+    res.json({ scope, names });
+  });
+
+  // The values of the requested scopes (default: the default scope), for the sm shell.
   api.post('/resolve', (req, res) => {
     if (req.anonymous) return res.status(401).json({ error: 'fetching values always needs a token' });
-    const secrets = store.resolveAll();
-    audit.add({ type: 'resolve', by: req.scope, count: Object.keys(secrets).length, pid: req.body?.pid ?? null });
-    res.json({ secrets });
+    const asked = req.body?.scopes;
+    if (asked !== undefined && (!Array.isArray(asked) || asked.length > 32)) return fail(res, 400, 'scopes must be a list (at most 32)');
+    const r = store.resolve(asked?.length ? asked : ['']);
+    const scopes = r.scopes.map((x) => x || 'default');
+    audit.add({ type: 'resolve', by: req.role, count: Object.keys(r.secrets).length, ...(asked?.length && { scopes }), pid: req.body?.pid ?? null });
+    res.json({ secrets: r.secrets, scopes, overridden: r.overridden.map((o) => ({ name: o.name, scope: o.scope || 'default', by: o.by || 'default' })), empty: r.empty.map((x) => x || 'default') });
   });
 
   api.post('/audit', (req, res) => {
     const e = req.body || {};
     audit.add({
       type: 'command',
-      by: req.scope,
+      by: req.role,
       mode: String(e.mode || ''),
       command: typeof e.command === 'string' ? e.command.slice(0, 4000) : JSON.stringify(e.command ?? '').slice(0, 4000),
       placeholders: Array.isArray(e.placeholders) ? e.placeholders.slice(0, 100).map(String) : [],
       redactions: e.redactions && typeof e.redactions === 'object' ? e.redactions : {},
       exit: Number.isInteger(e.exit) ? e.exit : null,
       cwd: typeof e.cwd === 'string' ? e.cwd.slice(0, 500) : null,
+      ...(Array.isArray(e.scopes) && e.scopes.length && { scopes: e.scopes.slice(0, 32).map(String) }),
     });
     res.status(204).end();
   });

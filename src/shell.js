@@ -54,10 +54,53 @@ export function parseArgs(args) {
   return { commandIndex: hasC && i < args.length ? i : -1, operandIndex: i < args.length ? i : -1, hasC };
 }
 
-export async function runShell(args) {
+// Scope names as sm writes them: lowercase, '' / "default" = default scope.
+const SCOPE_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+export function parseScopeList(text) {
+  const out = [];
+  for (const raw of String(text).split(/[,\s]+/)) {
+    const s = raw.trim().toLowerCase();
+    if (!s) continue;
+    if (s !== 'default' && !SCOPE_RE.test(s)) throw new Error(`invalid scope "${raw}": lowercase letters, digits, _ and -`);
+    if (!out.includes(s)) out.push(s);
+  }
+  return out;
+}
+
+// sm's own options, only at the very start (everything else is bash's, so
+// bash's -s keeps working after other options or as `sm -s -- ...`):
+//   -s|--scope NAME[,NAME...]   (repeatable)   --scope=NAME[,...]
+export function splitScopeArgs(args) {
+  const scopes = [];
+  let i = 0;
+  let given = false;
+  for (;;) {
+    const a = args[i];
+    if ((a === '-s' || a === '--scope') && args[i + 1] !== undefined && !args[i + 1].startsWith('-')) {
+      scopes.push(...parseScopeList(args[i + 1]));
+      i += 2;
+      given = true;
+    } else if (a?.startsWith('--scope=')) {
+      scopes.push(...parseScopeList(a.slice(8)));
+      i += 1;
+      given = true;
+    } else break;
+  }
+  if (given && !scopes.length) throw new Error('-s needs at least one scope name');
+  return { scopes: [...new Set(scopes)], given, rest: args.slice(i) };
+}
+
+export async function runShell(rawArgs) {
+  const parsed = splitScopeArgs(rawArgs);
+  const args = parsed.rest;
+  // Without -s a nested sm keeps the scopes of the sm shell it runs in.
+  const scopes = parsed.given ? parsed.scopes : process.env.SM_SCOPES ? parseScopeList(process.env.SM_SCOPES) : [];
   let secrets = {};
   try {
-    secrets = await getSecrets();
+    const r = await getSecrets(scopes);
+    secrets = r.secrets;
+    for (const s of r.empty || []) process.stderr.write(`sm: scope ${s} has no secrets\n`);
+    for (const o of r.overridden || []) process.stderr.write(`sm: ${o.name} is in scopes ${o.scope} and ${o.by}; using ${o.by}'s\n`);
   } catch (err) {
     // An unreachable server must not break every command the agent runs.
     process.stderr.write(`sm: ${err.message}; running without secrets\n`);
@@ -88,6 +131,8 @@ export async function runShell(args) {
   });
 
   env.SM_ACTIVE = '1'; // lets scripts and prompts detect they run inside sm
+  if (scopes.length) env.SM_SCOPES = scopes.join(','); // prompt tag sm[...] and nested sm
+  else delete env.SM_SCOPES;
   // Every variable that now holds a secret value, so agents started inside sm
   // can be given an environment without them (sm-agents.bash).
   const valueVars = new Set(Object.keys(env).filter((k) => k.startsWith('__SM_') && k !== '__SM_SECRET_VARS'));
@@ -140,6 +185,7 @@ export async function runShell(args) {
       if (process.env.SM_AUDIT !== '0') {
         await recordAudit({
           mode: interactive ? 'interactive' : hasC ? 'command' : 'script',
+          ...(scopes.length && { scopes }),
           command: commandIndex >= 0 ? args[commandIndex] : args.join(' '), // as written: placeholders only
           placeholders: [...used],
           envPlaceholders: [...new Set(Object.values(process.env).flatMap(findNames))],

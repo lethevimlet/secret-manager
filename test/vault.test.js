@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { SecretStore } from '../server/store.js';
-import { Vault, openKeyFile, newer } from '../server/vault.js';
+import { Vault, openKeyFile, newer, normalizeRepo } from '../server/vault.js';
 
 const PASSWORD = 'correct horse battery';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -200,4 +200,22 @@ test('newer(): timestamp first, device name breaks ties', () => {
   assert.equal(newer(x, y), y);
   assert.equal(newer(x, z), z);
   assert.equal(newer(z, x), z);
+});
+
+test('HTTPS repository addresses become SSH (deploy keys need SSH); others stay as given', () => {
+  assert.equal(normalizeRepo('https://github.com/you/sm-vault'), 'git@github.com:you/sm-vault.git');
+  assert.equal(normalizeRepo(' https://github.com/you/sm-vault.git/ '), 'git@github.com:you/sm-vault.git');
+  assert.equal(normalizeRepo('git@github.com:you/sm-vault.git'), 'git@github.com:you/sm-vault.git');
+  assert.equal(normalizeRepo('/srv/git/sm-vault.git'), '/srv/git/sm-vault.git');
+});
+
+test('an unreachable repository is a readable 400, not an internal error', async () => {
+  const t = setup();
+  try {
+    const a = t.server('alpha');
+    await assert.rejects(a.vault.init({ repo: path.join(t.root, 'missing.git'), password: PASSWORD }), (err) => err.status === 400 && /git clone/.test(err.message));
+    assert.equal(a.vault.configured, false);
+  } finally {
+    t.cleanup();
+  }
 });

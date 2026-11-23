@@ -104,6 +104,28 @@ export function newer(a, b) {
 
 const sameVersion = (a, b) => a.changedAt === b.changedAt && a.changedBy === b.changedBy;
 
+// Deploy keys work over SSH only: turn https://github.com/OWNER/REPO(.git)
+// (the address GitHub shows by default) into git@github.com:OWNER/REPO.git.
+export function normalizeRepo(repo) {
+  const r = String(repo || '').trim();
+  const m = /^https?:\/\/(?:[^@/]+@)?(github\.com|gitlab\.com|codeberg\.org|bitbucket\.org)\/([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i.exec(r);
+  return m ? `git@${m[1].toLowerCase()}:${m[2]}/${m[3]}.git` : r;
+}
+
+// git's last error line, phrased for the user (status 400, not "internal error").
+function gitError(err, repo) {
+  const msg = err.message;
+  let hint = '';
+  if (/read only|read-only|denied to deploy key|write access/i.test(msg)) {
+    hint = ' The deploy key has no write access: tick "Allow write access" for it in the repository settings.';
+  } else if (/Permission denied \(publickey\)|Could not read from remote repository|Repository not found|does not appear to be a git repository/i.test(msg)) {
+    hint = ' The server can\'t reach the repository: check the address, and that this server\'s deploy key is added to it with write access.';
+  } else if (/could not read Username|terminal prompts disabled/i.test(msg)) {
+    hint = ' Use the SSH address (git@github.com:you/sm-vault.git): deploy keys don\'t work over HTTPS.';
+  }
+  return Object.assign(new Error(`${msg}.${hint}`.replace(/\.\./, '.')), { status: 400, repo });
+}
+
 // ---- sync ----
 
 export class Vault {
@@ -178,7 +200,7 @@ export class Vault {
 
   async clone(repo) {
     fs.rmSync(this.repoDir, { recursive: true, force: true });
-    await this.git(['clone', '--quiet', repo, this.repoDir], { cwd: this.dir });
+    await this.git(['clone', '--quiet', repo, this.repoDir], { cwd: this.dir }).catch((err) => { throw gitError(err, repo); });
     await this.git(['config', 'user.name', `sm-server (${this.store.device})`]);
     await this.git(['config', 'user.email', 'sm-server@localhost']);
   }
@@ -190,6 +212,7 @@ export class Vault {
   // First server: new vault key, empty vault in the (empty) repository, push
   // every local secret. Returns the key file to hand to the user.
   async init({ repo, password }) {
+    repo = normalizeRepo(repo);
     if (this.configured) throw Object.assign(new Error('this server is already connected to a vault'), { status: 409 });
     await this.clone(repo);
     if (this.readRepoVault()) throw Object.assign(new Error('that repository already holds a vault: join it with its key file instead'), { status: 409 });
@@ -206,7 +229,7 @@ export class Vault {
     fs.writeFileSync(path.join(this.repoDir, 'secrets', '.gitkeep'), '');
     await this.git(['add', '-A']);
     await this.git(['commit', '--quiet', '-m', `sm-vault created by ${this.store.device}`]);
-    await this.git(['push', '--quiet', 'origin', 'HEAD:main']);
+    await this.git(['push', '--quiet', 'origin', 'HEAD:main']).catch((err) => { throw gitError(err, repo); });
     this.adopt({ repo, vaultId, vaultKey });
     await this.syncNow('init');
     return keyFile;
@@ -216,7 +239,8 @@ export class Vault {
   // vault, then sync (pulls everything, pushes what only this server has).
   async join({ keyFile, password }) {
     if (this.configured) throw Object.assign(new Error('this server is already connected to a vault'), { status: 409 });
-    const { vaultKey, vaultId, repo } = await openKeyFile(keyFile, password);
+    const { vaultKey, vaultId } = await openKeyFile(keyFile, password);
+    const repo = normalizeRepo(keyFile.repo);
     await this.clone(repo);
     const remote = this.readRepoVault();
     if (!remote) throw Object.assign(new Error('the repository holds no vault (run smctl sync init on the first server)'), { status: 409 });
